@@ -137,7 +137,7 @@ The phone chain hands off frames from its own renders only.
 ```bash
 ssim() { ffmpeg -i "$1" -i "$2" -lavfi "[0]scale=960:540,setsar=1[a];[1]scale=960:540,setsar=1[b];[a][b]ssim" \
   -f null - 2>&1 | grep -oE 'All:[0-9.]+'; }
-ffmpeg -v error -y -i probe.mp4 -frames:v 2 -vsync 0 probe_%d.png
+ffmpeg -v error -y -i probe.mp4 -frames:v 2 -fps_mode passthrough probe_%d.png
 ssim probe_1.png still_01.png   # frame 0 against the still it was given
 ssim probe_1.png probe_2.png    # the clip's own frame-to-frame step, the yardstick
 # Hop duty: the last frame against the end frame it was given.

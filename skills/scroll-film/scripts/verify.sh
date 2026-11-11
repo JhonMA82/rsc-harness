@@ -62,8 +62,8 @@ trap 'rm -rf "$TMP"' EXIT
 # The two last and the two first frames give the clips' own frame-to-frame step at the seam.
 edge_frames() { # clip index
   mkdir -p "$TMP/tail_$2" "$TMP/head_$2"
-  ffmpeg -v error -y -sseof -1 -i "$1" -vsync 0 "$TMP/tail_$2/%04d.png"
-  ffmpeg -v error -y -i "$1" -frames:v 2 -vsync 0 "$TMP/head_$2/%04d.png"
+  ffmpeg -v error -y -sseof -1 -i "$1" -fps_mode passthrough "$TMP/tail_$2/%04d.png"
+  ffmpeg -v error -y -i "$1" -frames:v 2 -fps_mode passthrough "$TMP/head_$2/%04d.png"
   ls "$TMP/tail_$2" | tail -2 > "$TMP/tail_$2.list"
 }
 ssim() { ffmpeg -v info -i "$1" -i "$2" -lavfi "[0][1]ssim" -f null - 2>&1 | grep -oE 'All:[0-9.]+' | tail -1 | cut -d: -f2; }

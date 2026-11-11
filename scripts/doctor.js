@@ -1,6 +1,6 @@
 import { hooksDir, hooksDirIsOurs, classifyWorktrees } from '../targets/worktree-reaper.mjs';
 import { existsSync, readFileSync, readdirSync, statSync, realpathSync } from 'node:fs';
-import { join, dirname, relative, sep } from 'node:path';
+import { join, dirname, relative, sep, isAbsolute } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { targetPaths, TARGET_IDS } from '../targets/index.js';
@@ -13,6 +13,7 @@ import { SDD_GATE_TEXT } from '../targets/hook-once.mjs';
 import { isEnabled, checkSello, readSello, countFindings, readEffectiveConfig, validateRiskConfig } from '../targets/sello.mjs';
 import { countGaps, listSkills, listAgents } from './lib/capabilities.js';
 import { resolveCommands, commandPath, targetHasCommands } from '../targets/commands.js';
+import { parseJsonc } from '../targets/git-permissions.js';
 import { inspectMemoryWiring } from '../targets/memory.js';
 import { inspectOmpBridge } from '../targets/omp-bridge.js';
 import { metricsSummary } from '../targets/session-memory-core.mjs';
@@ -196,6 +197,38 @@ function ownSkillsIn(paths, declared = []) {
   return { present: present.sort(), missing, declared };
 }
 
+// OpenCode discovers skills from these project directories (plus any configured source). rsc used
+// to link them into `.opencode/rsc/`, which OpenCode never scanned; this check is what lets doctor
+// say that out loud instead of reporting a healthy harness whose skills cannot be loaded.
+const OPENCODE_SKILL_DIRS = ['.opencode/skills', '.opencode/skill', '.claude/skills', '.agents/skills'];
+function opencodeSkillSources(root, home = homedir()) {
+  const sources = new Set(OPENCODE_SKILL_DIRS.map((dir) => join(root, ...dir.split('/'))));
+  const configs = ['opencode.json', 'opencode.jsonc', '.opencode/opencode.json', '.opencode/opencode.jsonc']
+    .map((rel) => join(root, ...rel.split('/')))
+    .concat([join(home, '.config', 'opencode', 'opencode.json'), join(home, '.config', 'opencode', 'opencode.jsonc')]);
+  for (const configPath of configs) {
+    if (!existsSync(configPath)) continue;
+    try {
+      const config = parseJsonc(readFileSync(configPath, 'utf8'));
+      const list = Array.isArray(config?.skills) ? config.skills
+        : Array.isArray(config?.skills?.paths) ? config.skills.paths : [];
+      for (const entry of list) {
+        if (typeof entry !== 'string' || /^[a-z]+:\/\//i.test(entry)) continue;
+        const dir = entry.startsWith('~/') ? join(homedir(), entry.slice(2))
+          : isAbsolute(entry) ? entry
+            : join(root, entry);
+        sources.add(dir);
+      }
+    } catch { /* an unreadable config still leaves the standard directories to check */ }
+  }
+  return [...sources];
+}
+function opencodeSkillsUnreachable(root, home = homedir()) {
+  const state = readState(targetPaths('opencode', undefined, root).stateFile);
+  const sources = opencodeSkillSources(root, home);
+  return Object.keys(state.skills || {}).filter((id) => !sources.some((dir) => existsSync(join(dir, id, 'SKILL.md')) || existsSync(join(dir, `${id}.md`))));
+}
+
 export function doctor({ target, home, cwd }) {
   const root = cwd || process.cwd();
   const paths = targetPaths(target, home, cwd);
@@ -293,6 +326,8 @@ export function doctor({ target, home, cwd }) {
     // V1-only files older versions wrote fail to load and nothing on rsc's side noticed. A plugin
     // without the V2 entry point is a problem, and `sync` rewrites it.
     opencodePluginsOutdated: target === 'opencode' ? opencodePluginsOutdated(root) : [],
+    // A managed skill whose link is not under a directory OpenCode scans is installed but unreachable.
+    opencodeSkillsUnreachable: target === 'opencode' ? opencodeSkillsUnreachable(root, home) : [],
   };
   // #277 — the three "missing" lists share one shape, { id, path, action }, so whoever builds on top
   // of doctor reads them the same way; and `healthy` is what the exit code says.
@@ -313,7 +348,7 @@ export function doctor({ target, home, cwd }) {
     report.onboarding = { status: 'incomplete', missing: ['<onboarding readiness could not be read>'], pending: [], action: String(error?.message || error).slice(0, 200) };
   }
   report.healthy = report.hookWired && !report.missing.length && !missingAgents.length && !missingCommands.length
-    && !report.opencodePluginsOutdated.length;
+    && !report.opencodePluginsOutdated.length && !report.opencodeSkillsUnreachable.length;
   return report;
 }
 
@@ -630,8 +665,10 @@ export function contextBudget({ target, home = homedir(), cwd = process.cwd() } 
         .map(({ id, descriptionBytes: bytes }) => ({ id, bytes })),
     },
     findings,
-    note: hookless
-      ? 'This target has no hook injection; only skill weight applies.'
-      : 'sessionStart counts the always-on body per wired scope; conditional banners are excluded.',
+    note: target === 'opencode'
+      ? 'OpenCode plugins inject session context at runtime; this budget counts the managed skill weight only.'
+      : hookless
+        ? 'This target has no hook injection; only skill weight applies.'
+        : 'sessionStart counts the always-on body per wired scope; conditional banners are excluded.',
   };
 }

@@ -144,7 +144,7 @@ export function evaluateHarness(root, manifest) {
   const OWN_DIRS = [
     ['.claude', 'skills'], ['.codex', 'rsc'], ['.cursor', 'rules'], ['.windsurf', 'rules'],
     ['.clinerules'], ['.roo', 'rules'], ['.continue', 'rules'], ['.junie'], ['.kiro', 'steering'],
-    ['.antigravity'], ['.opencode'], ['.rsc', 'skills'],
+    ['.antigravity'], ['.opencode', 'skills'], ['.opencode', 'rsc'], ['.rsc', 'skills'],
   ];
   const fromTeam = (name) => OWN_DIRS.some((dir) => existsSync(join(root, ...dir, name)));
   const missing = manifest.skills.filter((id) => !fromCatalog(id));

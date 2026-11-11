@@ -300,7 +300,7 @@ commit on a closed `main` is still refused. It is saved as `gitPermissions` in `
 | Claude Code | `.claude/settings.json` → `permissions.allow` (force-push under `ask`) |
 | Codex | `.codex/rules/rsc-git.rules` (force-push → `prompt`) |
 | Gemini | `.gemini/settings.json` → `tools.allowed` |
-| OpenCode | `opencode.json`: the `permissions` list on OpenCode 2, `permission.bash` on 1.x. An `opencode.jsonc` is never rewritten; rsc prints the rules to paste. |
+| OpenCode | `opencode.json`: the `permissions` list on OpenCode 2, `permission.bash` on 1.x. An `opencode.jsonc`, or an `opencode.json` with comments, is never rewritten; rsc prints the rules to paste. If the file already has V1 `permission.bash` rules, rsc stays on that map (OpenCode 2 reads it) and places its entries before the person's, so a stricter rule still wins. |
 | Cursor, DeepSeek Harness, Oh My Pi | Not covered: none has a safe per-command allow list. |
 
 `rsc git-permissions status | on | off` explains, per assistant, what rsc controls and what is left
@@ -366,7 +366,7 @@ The wizard asks which ones; `--target a,b` does it non-interactively.
 | `continue` | `.continue/rsc/<id>/` → symlink | rule in `.continue/rules/rsc-suggest.md` |
 | `roo` | `.roo/rsc/<id>/` → symlink | rule in `.roo/rules/rsc-suggest.md` |
 | `amp` | `.amp/rsc/<id>/` → symlink | block in `AGENTS.md` |
-| `opencode` | `.opencode/rsc/<id>/` → symlink | block in `AGENTS.md` |
+| `opencode` | `.opencode/skills/<id>/` → symlink (discovered natively) | block in `AGENTS.md` |
 | `deepseek` | `.dsh/skills/<id>/` → symlink (discovered natively) | block in `AGENTS.md` |
 | `omp` | `.omp/skills/<id>/` → symlink (discovered natively) | block in `.omp/AGENTS.md` |
 | `jules` | `.jules/rsc/<id>/` → symlink | block in `AGENTS.md` |

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { rmSync, rmdirSync, existsSync, cpSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync, appendFileSync, readdirSync, renameSync } from 'node:fs';
+import { rmSync, rmdirSync, existsSync, cpSync, lstatSync, mkdirSync, readFileSync, realpathSync, readlinkSync, writeFileSync, appendFileSync, readdirSync, renameSync } from 'node:fs';
 import { join, dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -50,6 +50,33 @@ function readBaseVersions(cwd) {
 function writeBaseVersions(cwd, versions) {
   mkdirSync(dirname(baseVersionsFile(cwd)), { recursive: true });
   writeFileSync(baseVersionsFile(cwd), JSON.stringify(versions, null, 2) + '\n');
+}
+
+// Old rsc releases linked OpenCode skills into `.opencode/rsc/<id>`, which OpenCode never
+// discovered. The state file stays there, so a sync knows the project is installed; move the
+// links to `.opencode/skills/<id>` and take the old symlink away. Only symlinks that resolve
+// into this project's `.rsc/skills/` are removed — a real directory or the user's own link in
+// `.opencode/rsc/` is theirs and stays.
+function migrateLegacyOpenCodeSkillLinks(target, cwd, ids) {
+  if (target !== 'opencode') return;
+  const legacyRoot = join(cwd, '.opencode', 'rsc');
+  const baseRoot = resolve(cwd, '.rsc', 'skills');
+  for (const id of ids) {
+    const legacy = join(legacyRoot, id);
+    try {
+      if (!lstatSync(legacy).isSymbolicLink()) continue;
+      const resolved = resolve(dirname(legacy), readlinkSync(legacy));
+      if (resolved !== baseRoot && !resolved.startsWith(`${baseRoot}${sep}`)) continue;
+      rmSync(legacy, { force: true });
+    } catch { /* absent, dangling, or not ours */ }
+  }
+}
+
+// The path older releases used for an OpenCode skill link. Kept as a recognized location so
+// `removeTargetInstall` can still reconcile and remove a pre-migration install; new writes use
+// targetPaths().skillDir.
+function legacyOpenCodeSkillPath(target, cwd, id) {
+  return target === 'opencode' ? join(cwd, '.opencode', 'rsc', id) : null;
 }
 
 // Materialize the real skill files into the project-local base. Copied once and reused;
@@ -273,6 +300,9 @@ export async function applyInstall({ skillIds = [], agentIds = [], target, home,
   if (fromScratch) hydrateLocalDecisions(cwd, readManifest(cwd));
   const state = readState(paths.stateFile);
   const backup = createBackup({ cwd, operation, target, paths: managedPaths, cliVersion: CLI_VERSION });
+  // OpenCode used to put its skill links in `.opencode/rsc/`; that directory is not a skill
+  // source OpenCode reads. Drop the old links as part of the same pass that writes the new ones.
+  migrateLegacyOpenCodeSkillLinks(target, cwd, [...new Set([...Object.keys(priorState.skills || {}), ...skillIds])]);
   // Decide base refresh per skill (see baseVersionsFile): a base is re-materialized when
   // its recorded version differs from the CLI version. Robust to multi-target installs/
   // syncs — a single global marker would be bumped by the first target and make later
@@ -632,7 +662,9 @@ export function removeTargetInstall({ target, home, cwd = process.cwd() }) {
     // A retired id no longer has a catalog directory, but `paths.skillDir` below still proves where
     // it lives — refusing it made every re-onboard that drops an old assistant loop on recovery.
     && (existsSync(join(ROOT, 'skills', id)) || isRetired(id))
-    && (entry.files || []).every((file) => resolve(file) === resolve(paths.skillDir(id))))
+    && (entry.files || []).every((file) => [paths.skillDir(id), legacyOpenCodeSkillPath(target, cwd, id)]
+      .filter(Boolean)
+      .some((known) => resolve(file) === resolve(known))))
     && (state.agents || []).every((name) => {
       if (!allAgentNames().includes(name)) return false;
       const file = agentPath(target, cwd, name);

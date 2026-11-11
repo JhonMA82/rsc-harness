@@ -92,6 +92,12 @@ test('detectTarget: AGENTS.md alone still means codex — no regression', () => 
   assert.equal(detectTarget(d), 'codex');
 });
 
+test('detectTarget: opencode.json alone is an explicit OpenCode signal', () => {
+  const d = tmp();
+  writeFileSync(join(d, 'opencode.json'), '{}');
+  assert.equal(detectTarget(d), 'opencode');
+});
+
 test('detectTarget: empty repo still falls back to claude', () => {
   assert.equal(detectTarget(tmp()), 'claude');
 });

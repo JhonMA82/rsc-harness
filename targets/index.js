@@ -43,7 +43,10 @@ const SPEC = {
   cursor: { root: '.cursor/rules', hook: '.cursor/rules/rsc-suggest.mdc', adapter: 'cursor', skillExt: '.mdc' },
   // AGENTS.md family — all read the same root AGENTS.md
   codex: { root: '.codex/rsc', hook: 'AGENTS.md', adapter: 'md' },
-  opencode: { root: '.opencode/rsc', hook: 'AGENTS.md', adapter: 'md' },
+  // OpenCode discovers skills at .opencode/skills/<id>/SKILL.md. The state file stays in
+  // .opencode/rsc so an install made before that path was known still resolves, and `sync`
+  // can find and migrate its old links instead of treating the project as uninstalled.
+  opencode: { root: '.opencode/skills', stateRoot: '.opencode/rsc', hook: 'AGENTS.md', adapter: 'md' },
   // DeepSeek Harness discovers <root>/.dsh/skills/<name>/SKILL.md natively.
   deepseek: { root: '.dsh/skills', hook: 'AGENTS.md', adapter: 'md' },
   // Oh My Pi discovers <root>/.omp/skills/<name>/SKILL.md natively and reads
@@ -124,7 +127,7 @@ export function detectTarget(cwd = process.cwd()) {
   if (has('.junie')) return 'junie';
   if (has('.kiro')) return 'kiro';
   if (has('.zed')) return 'zed';
-  if (has('.opencode')) return 'opencode';
+  if (has('.opencode') || has('opencode.json') || has('opencode.jsonc')) return 'opencode';
   if (has('.dsh')) return 'deepseek';
   if (has('.omp')) return 'omp';
   if (has('.amp')) return 'amp';
@@ -165,11 +168,12 @@ export function targetPaths(target, home = homedir(), cwd = process.cwd()) {
   const s = SPEC[target];
   if (!s) throw new Error(`unknown target ${target}`);
   const rootAbs = join(cwd, ...s.root.split('/'));
+  const stateAbs = join(cwd, ...(s.stateRoot || s.root).split('/'));
   return {
     root: rootAbs,
     projectRoot: cwd,
     skillDir: (id) => (s.skillExt ? join(rootAbs, `${id}${s.skillExt}`) : join(rootAbs, id)),
-    stateFile: join(rootAbs, '.rsc-state.json'),
+    stateFile: join(stateAbs, '.rsc-state.json'),
     hookTarget: join(cwd, ...s.hook.split('/')),
   };
 }

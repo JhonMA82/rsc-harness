@@ -604,6 +604,9 @@ function printDoctorHeadline(report) {
   if (o.missing?.length) say(`Missing: ${safeLines(o.missing).join(', ')}`);
   if (o.pending?.length) say(`Pending: ${safeLines(o.pending).map((p) => (p === CONSTITUTION_PATH ? `${p} (draft)` : p)).join(', ')}`);
   if (o.action) say(`Next: ${o.action}`);
+  if (report.opencodeSkillsUnreachable?.length) {
+    say(`OpenCode skills not discoverable: ${safeLines(report.opencodeSkillsUnreachable).join(', ')}. Run \`npx @ericrisco/rsc sync\` to move them under .opencode/skills/.`);
+  }
 }
 
 // What the harness costs in context before the user types anything. Printed ahead of the raw

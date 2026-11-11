@@ -6,8 +6,8 @@
 //
 // A PROJECT decision, recorded as `gitPermissions` in `.rsc.json`: true on a brand-new project, absent
 // on one adopted before this existed (nothing changes there until `rsc git-permissions on`), false
-// after `rsc git-permissions off`. Only rsc's own entries are ever added or removed; whatever the
-// person allowed or denied stays exactly as it was.
+// after `rsc git-permissions off`. Only rsc's own entries are added or removed; a person's rule with a
+// different pattern or effect keeps its original order after rsc's, so the last match is still theirs.
 //
 // Cursor is left out on purpose: its CLI matches only the first word (`Shell(git)`), so allowing a
 // push there would allow every git and gh command, `reset --hard` and `repo delete` included.
@@ -126,7 +126,34 @@ const hasV1 = (config) => OPENCODE_BASH.every(([p, a]) => config?.permission?.ba
 const hasV2 = (config) => Array.isArray(config?.permissions) && OPENCODE_V2.every((r) => config.permissions.some((x) => sameRule(x, r)));
 const jsoncOnly = (cwd) => !existsSync(join(cwd, 'opencode.json')) && existsSync(join(cwd, 'opencode.jsonc'));
 
+/**
+ * Does this file carry a V1 `permission.bash` rule that is not rsc's? A blanket string counts:
+ * it is the person's policy, and rewriting it into a V2 array would change which rules win.
+ * When one exists, rsc stays on the V1 map (OpenCode 2 still reads it) and puts its own entries
+ * first, so the person's rule — including a catch-all `deny` — is the last match and wins.
+ */
+export function hasUserV1Bash(config) {
+  const bash = config?.permission?.bash;
+  if (typeof bash === 'string') return true;
+  if (!bash || typeof bash !== 'object' || Array.isArray(bash)) return false;
+  return Object.entries(bash).some(([pattern, action]) => !OPENCODE_BASH.some(([p, a]) => p === pattern && a === action));
+}
+
+const isRscV1Entry = (bash, key) => OPENCODE_BASH.some(([pattern, action]) => pattern === key && action === bash[key]);
+// Our order is rsc's keys first and the person's after, so the person's rule is the last match.
+// A file from before that fix may have the opposite order: it has rsc's entries, but they win.
+function v1OrderSafe(config) {
+  const bash = config?.permission?.bash;
+  if (!bash || typeof bash !== 'object' || Array.isArray(bash)) return false;
+  const keys = Object.keys(bash);
+  const firstUser = keys.findIndex((key) => !isRscV1Entry(bash, key));
+  if (firstUser < 0) return true;
+  const lastRsc = keys.reduce((last, key, index) => (isRscV1Entry(bash, key) ? index : last), -1);
+  return lastRsc < firstUser;
+}
+
 function opencodeFormat(config) {
+  if (hasUserV1Bash(config)) return 'v1';
   const major = opencodeMajor();
   if (major !== null) return major >= 2 ? 'v2' : 'v1';
   return Array.isArray(config?.permissions) ? 'v2' : 'v1';
@@ -168,13 +195,26 @@ function wireOpencode(config, format) {
   } else {
     if (config.permission !== undefined && (typeof config.permission !== 'object' || config.permission === null)) return false;
     config.permission ||= {};
-    if (typeof config.permission.bash === 'string') return false; // a blanket rule is the person's call
+    // A blanket rule is the person's call. Normalise the string form to the map form so rsc's
+    // entries can sit before it; the person's catch-all remains the last match and still wins.
+    if (typeof config.permission.bash === 'string') {
+      if (!['allow', 'ask', 'deny'].includes(config.permission.bash)) return false;
+      config.permission.bash = { '*': config.permission.bash };
+    }
     dropV2(config); // back on 1.x (or unknown on a V1 file): one block, the one this OpenCode reads
-    const bash = config.permission.bash && typeof config.permission.bash === 'object' ? config.permission.bash : {};
-    // Re-inserted so the asks stay after the allows (OpenCode: the last matching rule wins).
-    for (const [pattern] of OPENCODE_BASH) delete bash[pattern];
-    for (const [pattern, action] of OPENCODE_BASH) bash[pattern] = action;
-    config.permission.bash = bash;
+    const bash = config.permission.bash && typeof config.permission.bash === 'object' ? { ...config.permission.bash } : {};
+    // Remove only rsc's exact entries. A person's rule with the same pattern but a different
+    // effect is THEIRS, and stays; it is not overwritten below because the key already exists.
+    for (const [pattern, action] of OPENCODE_BASH) if (bash[pattern] === action) delete bash[pattern];
+    // Allows, then the force-push asks, then every rule of the person's in its original order.
+    // OpenCode evaluates the last matching rule, so this is what keeps a user's `deny`/`ask` (or a
+    // catch-all `deny`) from being loosened by rsc's allows.
+    const next = {};
+    for (const [pattern, action] of OPENCODE_BASH) {
+      if (!Object.hasOwn(bash, pattern)) next[pattern] = action;
+    }
+    for (const [pattern, action] of Object.entries(bash)) next[pattern] = action;
+    config.permission.bash = next;
   }
   config.$schema ||= 'https://opencode.ai/config.json';
   return true;
@@ -203,9 +243,17 @@ function readJsonc(path) {
   } catch { return null; }
 }
 
+/** A JSONC file rsc will not rewrite: report wired if the rules are already there, else the snippet. */
+function opencodeJsonState(path, config) {
+  if (config && hasV2(config) && !hasUserV1Bash(config)) return { mode: 'wired', path, format: 'v2' };
+  if (config && hasV1(config) && v1OrderSafe(config)) return { mode: 'wired', path, format: 'v1' };
+  const format = config && (hasUserV1Bash(config) || hasV1(config)) ? 'v1' : opencodeFormat(config);
+  return { mode: 'manual', path, format, snippet: opencodeRulesSnippet(format) };
+}
+
 /**
  * Add rsc's entries. `{ mode: 'wired' | 'manual' | 'unsupported' | 'config-invalid', path }`; OpenCode
- * adds `format` ('v1' | 'v2'), and on 'manual' (an opencode.jsonc rsc will not rewrite) the `snippet`.
+ * adds `format` ('v1' | 'v2'), and on 'manual' (a JSONC file rsc will not rewrite) the `snippet`.
  */
 export function wireGitPermissions(target, cwd = process.cwd()) {
   const path = gitPermissionsPath(target, cwd);
@@ -213,11 +261,7 @@ export function wireGitPermissions(target, cwd = process.cwd()) {
   if (target === 'opencode' && jsoncOnly(cwd)) {
     // Rewriting a JSONC file would drop the person's comments: read it, never write it.
     const jsonc = join(cwd, 'opencode.jsonc');
-    const config = readJsonc(jsonc);
-    if (config && hasV2(config)) return { mode: 'wired', path: jsonc, format: 'v2' };
-    if (config && hasV1(config)) return { mode: 'wired', path: jsonc, format: 'v1' };
-    const format = opencodeFormat(config);
-    return { mode: 'manual', path: jsonc, format, snippet: opencodeRulesSnippet(format) };
+    return opencodeJsonState(jsonc, readJsonc(jsonc));
   }
   if (target === 'codex') {
     mkdirSync(dirname(path), { recursive: true });
@@ -227,7 +271,15 @@ export function wireGitPermissions(target, cwd = process.cwd()) {
   }
   const existed = existsSync(path);
   const config = readJson(path);
-  if (!config) return { mode: 'config-invalid', path }; // never overwrite a file we cannot read
+  if (!config) {
+    // OpenCode accepts JSONC in opencode.json too. Do not rewrite it (that would eat comments):
+    // read it with the JSONC parser and hand back the snippet, exactly as for .jsonc.
+    if (target === 'opencode') {
+      const jsonc = readJsonc(path);
+      if (jsonc) return opencodeJsonState(path, jsonc);
+    }
+    return { mode: 'config-invalid', path }; // never overwrite a file we cannot read
+  }
   if (target === 'claude') {
     config.permissions ||= {};
     config.permissions.allow = addAll(config.permissions.allow, CLAUDE_ALLOW);
@@ -300,14 +352,22 @@ export function gitPermissionsState(target, cwd = process.cwd()) {
   if (jsoncOnly(cwd)) {
     const jsonc = join(cwd, 'opencode.jsonc');
     const config = readJsonc(jsonc);
-    if (config && hasV2(config)) return { wired: true, format: 'v2', path: jsonc };
-    if (config && hasV1(config)) return { wired: true, format: 'v1', path: jsonc };
+    if (config && hasV2(config) && !hasUserV1Bash(config)) return { wired: true, format: 'v2', path: jsonc };
+    if (config && hasV1(config) && v1OrderSafe(config)) return { wired: true, format: 'v1', path: jsonc };
     return { wired: false, format: 'manual', path: jsonc };
   }
-  const config = (existsSync(path) && readJson(path)) || {};
-  if (hasV2(config)) return { wired: true, format: 'v2', path };
-  if (hasV1(config)) return { wired: true, format: 'v1', path };
-  return { wired: false, format: opencodeFormat(config), path };
+  let config = existsSync(path) ? readJson(path) : {};
+  let manual = false;
+  if (!config) {
+    // opencode.json may be JSONC too; it is readable, just not safe for rsc to rewrite.
+    config = existsSync(path) ? readJsonc(path) : null;
+    manual = Boolean(config);
+  }
+  config ||= {};
+  if (hasV2(config) && !hasUserV1Bash(config)) return { wired: true, format: 'v2', path };
+  if (hasV1(config) && v1OrderSafe(config)) return { wired: true, format: 'v1', path };
+  const userV1 = hasUserV1Bash(config) || hasV1(config);
+  return { wired: false, format: manual ? 'manual' : userV1 ? 'v1' : opencodeFormat(config), path };
 }
 
 // ── What `rsc git-permissions on|off|status` says, per assistant (#298) ─────────────────────────
@@ -322,7 +382,7 @@ const WHEN_OFF = {
   claude: 'rsc removes its rules; Claude Code asks again for commit, push and PR, unless your own permissions allow them.',
   codex: 'rsc deletes its rules file; Codex applies its own approval policy and any rules of yours in .codex/rules.',
   gemini: 'rsc removes its entries; Gemini CLI asks before those commands unless your own tools.allowed lists them.',
-  opencode: 'rsc removes its rules; only your own OpenCode rules apply. With no rule matching, OpenCode 2 asks and OpenCode 1.x runs the command.',
+  opencode: 'rsc removes its rules; only your own OpenCode rules apply. OpenCode 2 already allows by default, so "off" does not mean it asks; OpenCode 1.x runs the command too.',
 };
 
 const indent = (text, pad = '    ') => text.split('\n').map((l) => pad + l).join('\n');

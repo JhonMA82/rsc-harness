@@ -621,7 +621,10 @@ test('AGENTS.md family (codex/zed/opencode/amp/jules) shares one idempotent bloc
   const cwd = mkdtempSync(join(tmpdir(), 'rsc-cwd-'));
   for (const target of ['codex', 'zed', 'opencode', 'amp', 'jules']) {
     await applyInstall({ skillIds: ['suggest', 'go'], target, cwd });
-    assert.ok(existsSync(join(cwd, `.${target}/rsc/go/SKILL.md`)));
+    const skill = target === 'opencode'
+      ? join(cwd, '.opencode/skills/go/SKILL.md')
+      : join(cwd, `.${target}/rsc/go/SKILL.md`);
+    assert.ok(existsSync(skill), `${target}: skill in the directory its assistant discovers`);
   }
   const agents = readFileSync(join(cwd, 'AGENTS.md'), 'utf8');
   assert.equal(agents.match(/rsc-suggest:start/g).length, 1, 'block appears exactly once');

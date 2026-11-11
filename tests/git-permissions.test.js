@@ -140,16 +140,83 @@ test('gp09 · OpenCode 1.x or unknown version: the V1 `permission.bash` map, whi
   }
 });
 
-test('gp10 · moving to OpenCode 2 migrates rsc\'s V1 entries to V2 and leaves the person\'s V1 rules alone', () => {
+test('gp10 · a V1 map with the person\'s rules stays V1 on OpenCode 2, so its precedence is preserved', () => {
   const cwd = project();
   writeFileSync(join(cwd, 'opencode.json'), JSON.stringify({ permission: { bash: { 'npm *': 'allow' } } }));
+  const r = withMajor('2', () => wireGitPermissions('opencode', cwd));
+  assert.equal(r.format, 'v1');
+  const c = json(join(cwd, 'opencode.json'));
+  assert.equal(c.permissions, undefined);
+  assert.equal(c.permission.bash['npm *'], 'allow', 'the person\'s rule survives');
+  assert.equal(Object.keys(c.permission.bash).at(-1), 'npm *', 'the person\'s rule is the last match');
+  assert.equal(c.permission.bash['git push *'], 'allow');
+  assert.equal(withMajor('2', () => gitPermissionsState('opencode', cwd)).format, 'v1');
+});
+
+test('gp10b · rsc\'s own old V1 entries still migrate to V2 when no person\'s rule is left', () => {
+  const cwd = project();
   withMajor('1', () => wireGitPermissions('opencode', cwd));
-  assert.equal(json(join(cwd, 'opencode.json')).permission.bash['git push *'], 'allow');
   withMajor('2', () => wireGitPermissions('opencode', cwd));
   const c = json(join(cwd, 'opencode.json'));
-  assert.deepEqual(c.permission, { bash: { 'npm *': 'allow' } });
+  assert.equal(c.permission, undefined);
   assert.ok(c.permissions.some((x) => x.resource === 'git push *' && x.effect === 'allow'));
-  assert.equal(gitPermissionsState('opencode', cwd).format, 'v2', 'a file already on V2 is read as V2 even with no version known');
+  assert.equal(withMajor('2', () => gitPermissionsState('opencode', cwd)).format, 'v2');
+});
+
+test('gp10c · a person\'s catch-all deny or same-command rule is never loosened by rsc\'s allows', () => {
+  for (const [name, bash] of [
+    ['catch-all deny', { '*': 'deny' }],
+    ['same-command deny', { 'git push *': 'deny' }],
+    ['same-command ask', { 'git push *': 'ask' }],
+  ]) {
+    const cwd = project();
+    writeFileSync(join(cwd, 'opencode.json'), JSON.stringify({ permission: { bash } }));
+    withMajor('1', () => wireGitPermissions('opencode', cwd));
+    const got = json(join(cwd, 'opencode.json')).permission.bash;
+    const keys = Object.keys(got);
+    for (const [pattern, effect] of Object.entries(bash)) {
+      assert.equal(got[pattern], effect, `${name}: the person's rule keeps its effect`);
+      if (pattern === '*') assert.equal(keys.at(-1), pattern, `${name}: the catch-all is the last match`);
+      else if (pattern !== 'git push *') assert.ok(keys.indexOf(pattern) > keys.indexOf('git push *'), `${name}: the person's rule comes after rsc's allow`);
+    }
+  }
+});
+
+test('gp10d · an old V1 file where rsc\'s rules come after the person\'s is reported not wired', () => {
+  const cwd = project();
+  writeFileSync(join(cwd, 'opencode.json'), JSON.stringify({ permission: { bash: { 'git push *': 'deny' } } }));
+  withMajor('2', () => wireGitPermissions('opencode', cwd));
+  const c = json(join(cwd, 'opencode.json'));
+  const bash = c.permission.bash;
+  const reordered = { 'git push *': bash['git push *'], ...Object.fromEntries(Object.entries(bash).filter(([key]) => key !== 'git push *')) };
+  writeFileSync(join(cwd, 'opencode.json'), JSON.stringify({ permission: { bash: reordered } }));
+  const state = withMajor('2', () => gitPermissionsState('opencode', cwd));
+  assert.equal(state.format, 'v1');
+  assert.equal(state.wired, false);
+});
+
+test('gp11b · opencode.json with comments is read as JSONC, never rewritten, and reports the snippet', () => {
+  const cwd = project();
+  const body = '{\n  // my model\n  "model": "opencode/big-pickle",\n}\n';
+  writeFileSync(join(cwd, 'opencode.json'), body);
+  const r = withMajor('2', () => wireGitPermissions('opencode', cwd));
+  assert.equal(r.mode, 'manual');
+  assert.match(r.snippet, /"permissions"/);
+  assert.equal(readFileSync(join(cwd, 'opencode.json'), 'utf8'), body, 'comments survive');
+  const s = withMajor('2', () => gitPermissionsState('opencode', cwd));
+  assert.equal(s.format, 'manual');
+  assert.equal(s.wired, false);
+});
+
+test('gp11c · a V1 map with the person\'s rules wins over the version probe: the snippet stays V1', () => {
+  const cwd = project();
+  const body = '{\n  // keep\n  "permission": { "bash": { "git push *": "deny" } },\n}\n';
+  writeFileSync(join(cwd, 'opencode.json'), body);
+  const r = withMajor('2', () => wireGitPermissions('opencode', cwd));
+  assert.equal(r.mode, 'manual');
+  assert.equal(r.format, 'v1');
+  assert.match(r.snippet, /"permission"/);
+  assert.doesNotMatch(r.snippet, /"permissions"/);
 });
 
 test('gp11 · opencode.jsonc is read, never rewritten: rsc reports "manual" and prints the rules to paste', () => {

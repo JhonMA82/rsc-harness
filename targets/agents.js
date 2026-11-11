@@ -16,6 +16,7 @@ import {
   stackAgents, stackAgentNames, stackAgentByName,
   resolveStackAgentNames, validateAgentCatalog,
 } from './agent-catalog.js';
+import { opencodeMajor } from './git-permissions.js';
 
 // Concrete model per provider per tier. June 2026 defaults — EDIT to your account's
 // models; the TIER is the contract, the id is yours to change. `light` is deliberately
@@ -217,6 +218,10 @@ export function writeDeveloperTier(cwd, tier) {
 // OpenCode V1 tool names a declared capability maps to. `read`/`search` need nothing: what the agent
 // may read is the project's policy to decide, and saying `read: true` would be a grant.
 const RESTRICT_TOOLS = { edit: ['edit', 'write', 'patch'], shell: ['bash'] };
+// OpenCode V2 folded write/patch into `edit` and bash into `shell`. A V2 agent file uses those
+// actions in an ordered `permissions` array; the old `tools` map is deprecated and is ignored the
+// moment the file also uses a V2 field.
+const RESTRICT_V2 = { edit: 'edit', shell: 'shell' };
 // rsc's capability names predate any one assistant. OMP's built-in tool is `bash`, and it accepts
 // `search` as a legacy alias for `grep`, but being explicit keeps an unknown alias from silently
 // granting nothing (or everything) in a future release.
@@ -225,13 +230,28 @@ function restrictedTools(tools) {
   if (!tools) return [];
   return Object.entries(RESTRICT_TOOLS).filter(([cap]) => !tools.includes(cap)).flatMap(([, names]) => names);
 }
+function restrictedV2Actions(tools) {
+  if (!tools) return [];
+  const actions = Object.entries(RESTRICT_V2).filter(([cap]) => !tools.includes(cap)).map(([, action]) => action);
+  return [...new Set(actions)];
+}
 
 function renderMd(spec, model, agent, toolsFormat = spec.toolsFormat) {
-  const fm = ['---', `name: ${agent.name}`, `description: "${agent.desc}"`];
+  const fm = ['---'];
+  // A V2 file cannot mix V1 fields with `permissions`: OpenCode reads it as V2 and ignores the
+  // V1 ones with a warning. The ID comes from the filename in V2, so `name` is omitted there.
+  if (toolsFormat !== 'restrict-v2') fm.push(`name: ${agent.name}`);
+  fm.push(`description: "${agent.desc}"`);
   if (model) fm.push(`model: ${model}`);
   if (spec.mode) fm.push(`mode: ${spec.mode}`);
   if (agent.tools) {
-    if (toolsFormat === 'restrict') {
+    if (toolsFormat === 'restrict-v2') {
+      const denied = restrictedV2Actions(agent.tools);
+      if (denied.length) {
+        fm.push('permissions:');
+        for (const action of denied) fm.push(`  - action: ${action}`, '    resource: "*"', '    effect: deny');
+      }
+    } else if (toolsFormat === 'restrict') {
       const denied = restrictedTools(agent.tools);
       if (denied.length) {
         fm.push('tools:');
@@ -278,6 +298,15 @@ function resolveModel(target, cwd, tier) {
 
 export const effectiveAgentModel = (target, cwd, tier = readDeveloperTier(cwd)) => (AGENT_TARGETS[target] ? resolveModel(target, cwd, tier) : null);
 
+// OpenCode 2 reads an ordered `permissions` array; the V1 `tools` map is deprecated and is
+// translated only while the file remains V1. Write native V2 when the installed OpenCode is 2,
+// and keep the map (read by both majors) when it is 1 or cannot be probed.
+function agentToolsFormat(target, spec) {
+  if (target !== 'opencode') return spec.toolsFormat;
+  const major = opencodeMajor();
+  return major !== null && major >= 2 ? 'restrict-v2' : 'restrict';
+}
+
 function renderAgent(target, spec, model, agent, toolsFormat) {
   return spec.format === 'json' ? renderJson(model, agent)
     : spec.format === 'toml' ? renderToml(model, agent)
@@ -306,9 +335,11 @@ function writeDigests(cwd, digests) {
 function knownRenderings(target, cwd, agent) {
   const spec = AGENT_TARGETS[target];
   const out = new Set();
+  const formats = target === 'opencode' ? ['restrict', 'restrict-v2'] : [spec.toolsFormat];
   for (const tier of ['balanced', 'heavy']) {
-    out.add(renderAgent(target, spec, resolveModel(target, cwd, tier), agent));
-    out.add(renderAgent(target, spec, spec.model(tier), agent));
+    for (const model of new Set([resolveModel(target, cwd, tier), spec.model(tier)])) {
+      for (const format of formats) out.add(renderAgent(target, spec, model, agent, format));
+    }
     if (spec.legacyModel) out.add(renderAgent(target, spec, spec.legacyModel(tier), agent, 'map'));
   }
   return out;
@@ -342,6 +373,7 @@ export function agentPath(target, cwd, name = 'developer') {
 export function writeAgentsDetailed(target, cwd, tier = readDeveloperTier(cwd), names = agentNames(), { force = false } = {}) {
   const spec = AGENT_TARGETS[target];
   if (!spec) return { written: [], kept: [] };
+  const toolsFormat = agentToolsFormat(target, spec);
   const digests = readDigests(cwd);
   const written = [];
   const kept = [];
@@ -349,7 +381,7 @@ export function writeAgentsDetailed(target, cwd, tier = readDeveloperTier(cwd), 
     const agent = byName(name);
     if (!agent) continue;
     const effectiveTier = agent.tier === 'heavy' ? 'heavy' : tier;
-    const content = renderAgent(target, spec, resolveModel(target, cwd, effectiveTier), agent);
+    const content = renderAgent(target, spec, resolveModel(target, cwd, effectiveTier), agent, toolsFormat);
     const path = agentPath(target, cwd, agent.name);
     if (!force && ownership(target, cwd, agent, path, digests) === 'user') {
       // Unless it already IS what rsc would write — then there is nothing to protect, only to record.

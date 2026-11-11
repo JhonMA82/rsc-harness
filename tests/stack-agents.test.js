@@ -8,6 +8,11 @@ import { tmpdir } from 'node:os';
 import * as agents from '../targets/agents.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const withMajor = (major, fn) => {
+  const before = process.env.RSC_OPENCODE_MAJOR;
+  process.env.RSC_OPENCODE_MAJOR = major;
+  try { return fn(); } finally { if (before === undefined) delete process.env.RSC_OPENCODE_MAJOR; else process.env.RSC_OPENCODE_MAJOR = before; }
+};
 
 const EXPECTED_NEW = [
   'cpp-build-resolver', 'cpp-reviewer',
@@ -90,28 +95,36 @@ test('Go, C++ and Python source receipts are dated and primary', () => {
 test('a requested stack agent renders natively with its declared tools on all 9 targets', () => {
   assert.equal(typeof agents.writeAgents, 'function');
   for (const target of agents.AGENT_TARGET_IDS) {
-    const cwd = mkdtempSync(join(tmpdir(), `rsc-stack-${target}-`));
-    const written = agents.writeAgents(target, cwd, 'balanced', ['go-reviewer']);
-    assert.equal(written.length, 1, target);
-    const path = agents.agentPath(target, cwd, 'go-reviewer');
-    assert.ok(existsSync(path), `${target}: go-reviewer`);
-    const text = readFileSync(path, 'utf8');
-    assert.match(text, /go-reviewer/);
-    if (path.endsWith('.json')) {
-      assert.deepEqual(JSON.parse(text).tools, ['read', 'search']);
-    } else if (path.endsWith('.toml')) {
-      assert.match(text, /^tools = \["read", "search"\]$/m);
-    } else if (target === 'opencode') {
-      // #298: OpenCode used to get `read: true` / `search: true` — grants that loosened a stricter
-      // project policy. It is restrict-only now: a read-only reviewer is denied the edit and shell
-      // tools it never declared, and is granted nothing.
-      assert.match(text, /^tools:\n {2}edit: false\n {2}write: false\n {2}patch: false\n {2}bash: false$/m);
-      assert.doesNotMatch(text, /: true$/m);
-    } else if (target === 'omp') {
-      // OMP names the tool `grep`; `search` survives only as its legacy alias.
-      assert.match(text, /^tools: \[read, grep\]$/m);
-    } else {
-      assert.match(text, /^tools: \[read, search\]$/m);
+    const cases = target === 'opencode' ? ['1', '2'] : [null];
+    for (const major of cases) {
+      const cwd = mkdtempSync(join(tmpdir(), `rsc-stack-${target}-${major || 'default'}-`));
+      const written = withMajor(major, () => agents.writeAgents(target, cwd, 'balanced', ['go-reviewer']));
+      assert.equal(written.length, 1, `${target}/${major}`);
+      const path = agents.agentPath(target, cwd, 'go-reviewer');
+      assert.ok(existsSync(path), `${target}/${major}: go-reviewer`);
+      const text = readFileSync(path, 'utf8');
+      assert.ok(/go-reviewer|Go reviewer/.test(text), `${target}/${major}: identifies the agent`);
+      if (path.endsWith('.json')) {
+        assert.deepEqual(JSON.parse(text).tools, ['read', 'search']);
+      } else if (path.endsWith('.toml')) {
+        assert.match(text, /^tools = \["read", "search"\]$/m);
+      } else if (target === 'opencode' && major === '1') {
+        // OpenCode 1.x: the V1 tools map. Restrict-only: a read-only reviewer is denied the edit
+        // and shell tools it never declared, and is granted nothing.
+        assert.match(text, /^tools:\n {2}edit: false\n {2}write: false\n {2}patch: false\n {2}bash: false$/m);
+        assert.doesNotMatch(text, /: true$/m);
+      } else if (target === 'opencode') {
+        // OpenCode 2.x: the native ordered permissions array, no deprecated `name`/`tools`.
+        assert.match(text, /^permissions:\n(?: {2}- action: (?:edit|shell)\n {4}resource: "\*"\n {4}effect: deny\n?)+$/m);
+        assert.doesNotMatch(text, /^name:/m);
+        assert.doesNotMatch(text, /^tools:/m);
+        assert.doesNotMatch(text, /: true$/m);
+      } else if (target === 'omp') {
+        // OMP names the tool `grep`; `search` survives only as its legacy alias.
+        assert.match(text, /^tools: \[read, grep\]$/m);
+      } else {
+        assert.match(text, /^tools: \[read, search\]$/m);
+      }
     }
   }
 });

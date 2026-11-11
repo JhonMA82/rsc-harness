@@ -35,7 +35,10 @@ test('installing writes every declared agent, in the target own dir and extensio
     for (const name of agentNames()) {
       const p = agentPath(target, cwd, name);
       assert.ok(existsSync(p), `${target}: ${name} not written to ${p}`);
-      assert.match(readFileSync(p, 'utf8'), new RegExp(name), `${target}: ${name} must name itself`);
+      const text = readFileSync(p, 'utf8');
+      // OpenCode 2 takes the agent id from the filename and writes no V1 `name` field.
+      if (target !== 'opencode') assert.match(text, new RegExp(name), `${target}: ${name} must name itself`);
+      else assert.match(text, /^description:/m, `${target}: ${name} has a description`);
     }
   }
 });

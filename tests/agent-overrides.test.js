@@ -34,6 +34,11 @@ function repo(p) {
 const cli = (cwd, ...args) => spawnSync(process.execPath, [join(ROOT, 'scripts', 'rsc.js'), ...args], {
   cwd, encoding: 'utf8', env: { ...process.env, HOME: cwd },
 });
+const withMajor = (major, fn) => {
+  const before = process.env.RSC_OPENCODE_MAJOR;
+  process.env.RSC_OPENCODE_MAJOR = major;
+  try { return fn(); } finally { if (before === undefined) delete process.env.RSC_OPENCODE_MAJOR; else process.env.RSC_OPENCODE_MAJOR = before; }
+};
 
 // ------------------------------------------------------------------ A. the model
 
@@ -111,20 +116,31 @@ test('i298 · the pin survives every writeManifest path (recordInManifest on a l
 
 // ------------------------------------------------------------------ B. permissions
 
-test('i298 · OpenCode never grants a tool: a reviewer gets only false overrides, the developer no tools block', () => {
-  const cwd = tmp('perms');
-  const names = allAgentNames();
-  writeAgents('opencode', cwd, 'balanced', names);
-  for (const name of names) {
-    assert.doesNotMatch(read(agentPath('opencode', cwd, name)), /:\s*true\b/, `${name}: no grant`);
+test('i298 · OpenCode never grants a tool: V1 restricts with false entries, V2 with a deny array', () => {
+  for (const major of ['1', '2']) {
+    const cwd = tmp(`perms-${major}`);
+    const names = allAgentNames();
+    withMajor(major, () => writeAgents('opencode', cwd, 'balanced', names));
+    for (const name of names) {
+      assert.doesNotMatch(read(agentPath('opencode', cwd, name)), /:\s*true\b/, `${major}/${name}: no grant`);
+    }
+    const reviewer = read(agentPath('opencode', cwd, 'go-reviewer'));
+    if (major === '1') {
+      assert.match(reviewer, /^tools:\n {2}edit: false\n {2}write: false\n {2}patch: false\n {2}bash: false$/m);
+      assert.doesNotMatch(reviewer, /^ {2}(read|search):/m, 'read/search need nothing: the project policy decides');
+      assert.doesNotMatch(read(agentPath('opencode', cwd, 'developer')), /^tools:/m, 'developer inherits');
+      assert.doesNotMatch(read(agentPath('opencode', cwd, 'go-build-resolver')), /^tools:/m, 'edit+shell role inherits');
+      // spec-miner declares edit but not shell: it may edit, it is not handed a shell it never asked for.
+      assert.match(read(agentPath('opencode', cwd, 'spec-miner')), /^tools:\n {2}bash: false\n---$/m);
+    } else {
+      assert.match(reviewer, /^permissions:\n {2}- action: edit\n {4}resource: "\*"\n {4}effect: deny\n {2}- action: shell\n {4}resource: "\*"\n {4}effect: deny\n---$/m);
+      assert.doesNotMatch(reviewer, /^name:/m, 'V2 gets its id from the filename');
+      assert.doesNotMatch(read(agentPath('opencode', cwd, 'developer')), /^permissions:/m, 'developer inherits');
+      assert.doesNotMatch(read(agentPath('opencode', cwd, 'go-build-resolver')), /^permissions:/m, 'edit+shell role inherits');
+      // spec-miner may edit; only the shell it never asked for is denied.
+      assert.match(read(agentPath('opencode', cwd, 'spec-miner')), /^permissions:\n {2}- action: shell\n {4}resource: "\*"\n {4}effect: deny\n---$/m);
+    }
   }
-  const reviewer = read(agentPath('opencode', cwd, 'go-reviewer'));
-  assert.match(reviewer, /^tools:\n {2}edit: false\n {2}write: false\n {2}patch: false\n {2}bash: false$/m);
-  assert.doesNotMatch(reviewer, /^ {2}(read|search):/m, 'read/search need nothing: the project policy decides');
-  assert.doesNotMatch(read(agentPath('opencode', cwd, 'developer')), /^tools:/m, 'developer inherits');
-  assert.doesNotMatch(read(agentPath('opencode', cwd, 'go-build-resolver')), /^tools:/m, 'edit+shell role inherits');
-  // spec-miner declares edit but not shell: it may edit, it is not handed a shell it never asked for.
-  assert.match(read(agentPath('opencode', cwd, 'spec-miner')), /^tools:\n {2}bash: false\n---$/m);
 });
 
 // ------------------------------------------------------------------ C. overrides survive sync

@@ -165,7 +165,8 @@ function markdown(command, target) {
   const body = renderArgs(target, command.body);
   if (target === 'cursor' || target === 'cline') return `# /${command.name}\n\n${command.description}\n\n${body}\n`;
   if (target === 'windsurf') return `# /${command.name}\n\n${command.description}\n\n1. ${body.replaceAll('\n', '\n2. ')}\n`;
-  const fm = ['---', `description: "${command.description.replaceAll('"', '\\"')}"`, 'argument-hint: "[arguments]"'];
+  const fm = ['---', `description: "${command.description.replaceAll('"', '\\"')}"`];
+  if (target !== 'opencode') fm.push('argument-hint: "[arguments]"');
   if (target === 'copilot') fm.push('mode: agent');
   if (target === 'opencode' && command.kind === 'agent') fm.push(`agent: ${command.backing}`);
   fm.push('---', '');

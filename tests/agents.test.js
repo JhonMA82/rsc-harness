@@ -8,18 +8,18 @@ import {
   readDeveloperTier, writeDeveloperTier,
 } from '../targets/agents.js';
 
-test('the 8 agent-capable targets each render a developer agent with a model (valid per format)', () => {
+test('the 9 agent-capable targets each render a developer agent with the right model contract', () => {
   const cwd = mkdtempSync(join(tmpdir(), 'rsc-ag-'));
   assert.deepEqual([...AGENT_TARGET_IDS].sort(),
-    ['claude', 'codex', 'copilot', 'cursor', 'gemini', 'junie', 'kiro', 'opencode']);
+    ['claude', 'codex', 'copilot', 'cursor', 'gemini', 'junie', 'kiro', 'omp', 'opencode']);
   for (const t of AGENT_TARGET_IDS) {
     writeDeveloperAgent(t, cwd);
     const p = developerAgentPath(t, cwd);
     assert.ok(existsSync(p), `${t} agent written`);
     const c = readFileSync(p, 'utf8');
-    // #298: OpenCode agents inherit the session's model by default, so they carry none; every other
-    // target keeps its tier model.
-    if (t === 'opencode') assert.doesNotMatch(c, /^model:/m, 'opencode inherits the session model');
+    // #298: OpenCode and OMP agents inherit the session's model by default, so they carry none;
+    // every other target keeps its tier model.
+    if (t === 'opencode' || t === 'omp') assert.doesNotMatch(c, /^model:/m, `${t} inherits the session model`);
     else assert.ok(/model/.test(c), `${t} carries a model`);
     if (p.endsWith('.json')) assert.doesNotThrow(() => JSON.parse(c), `${t} json parses`);
   }

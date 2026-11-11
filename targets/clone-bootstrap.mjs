@@ -122,7 +122,7 @@ export function readManifest(root) {
  *
  * `.rsc/skills/<id>` is the canonical home of a skill's content on every assistant — the per-target
  * directories (`.claude/skills/`, `.codex/rsc/`, …) are links into it — so one rule answers this for
- * all seventeen without teaching this file a single target's layout.
+ * all nineteen without teaching this file a single target's layout.
  *
  * Only what is DECLARED AND MISSING is reported. Not the reverse: an extra directory could equally be
  * a skill someone wrote by hand, and this repo has already broken a person's own work once by
@@ -133,7 +133,7 @@ export function evaluateHarness(root, manifest) {
     return { verdict: 'unknown', missing: [], ownMissing: [], optOutsMissing: [], tierDiffers: null };
   }
   // Catalog skills: `.rsc/skills/<id>` is where their content lands, and it is the same on all
-  // seventeen assistants — the per-target directories are links into it.
+  // nineteen assistants — the per-target directories are links into it.
   const fromCatalog = (id) => existsSync(join(root, '.rsc', 'skills', id));
   // Own skills are a different thing in a different place, and conflating them is how a healthy
   // project ends up nagged every session about work that is already correct. `.rsc/skills/` is filled

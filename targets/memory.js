@@ -19,6 +19,9 @@ export const MEMORY_TARGETS = Object.freeze({
   cursor: 'assisted',
   gemini: 'full',
   opencode: 'full',
+  // OMP has no project settings file: its lifecycle rides the extension bridge in
+  // `.omp/hooks/pre/rsc.js` and the shared modules under `.rsc/`.
+  omp: 'full',
 });
 
 const CONFIG = Object.freeze({
@@ -159,6 +162,10 @@ function commonPaths(cwd) {
 
 export function memoryManagedPaths(target, cwd = process.cwd()) {
   if (!MEMORY_TARGETS[target]) return [];
+  // OMP reads the lifecycle through the bridge, not a config file of its own. Its managed paths
+  // are exactly the shared `.rsc/` modules — already ignored as a directory — so a sync result
+  // never names a committed file it did not write.
+  if (target === 'omp') return commonPaths(cwd);
   const paths = [...commonPaths(cwd), join(cwd, ...CONFIG[target].split('/'))];
   if (target === 'cursor') paths.push(join(cwd, '.cursor', 'rules', 'rsc-memory.mdc'));
   return paths;
@@ -170,6 +177,16 @@ export function wireMemory(target, cwd = process.cwd()) {
   if (!memoryEnabledForProject(cwd)) {
     unwireMemory(target, cwd);
     return { mode: 'disabled', reason: 'project-disabled', paths: [] };
+  }
+  if (target === 'omp') {
+    const [core, adapter, cli] = commonPaths(cwd);
+    mkdirSync(dirname(core), { recursive: true });
+    copyFileSync(join(HERE, 'session-memory-core.mjs'), core);
+    copyFileSync(join(HERE, 'session-memory-adapter.mjs'), adapter);
+    copyFileSync(join(HERE, 'session-memory.mjs'), cli);
+    const paths = memoryManagedPaths(target, cwd);
+    for (const path of paths) exclude(cwd, path);
+    return { mode, reason: 'wired', paths };
   }
   const configPath = join(cwd, ...CONFIG[target].split('/'));
   if (tracked(cwd, configPath)) return { mode: 'degraded', reason: 'config-tracked', paths: [] };
@@ -220,6 +237,27 @@ export function inspectMemoryWiring(target, cwd = process.cwd(), recorded = null
   if (!recorded && !installed) {
     return { supportedMode, mode, status: 'not-installed', reason: 'not-wired', missing: [], tracked: [] };
   }
+  if (target === 'omp') {
+    const bridged = recorded?.paths?.length ? recorded.paths : memoryManagedPaths(target, cwd);
+    const missing = bridged.filter((path) => !existsSync(path));
+    const trackedPaths = bridged.filter((path) => tracked(cwd, path));
+    const status = mode === 'degraded' || mode === 'not-installed' || missing.length || trackedPaths.length ? 'degraded' : 'ready';
+    return {
+      supportedMode,
+      mode,
+      status,
+      reason: mode === 'degraded' ? (recorded?.reason || 'adapter-degraded')
+        : trackedPaths.length ? 'memory-path-tracked'
+          : missing.length ? 'memory-path-missing'
+            : recorded?.reason || 'wired',
+      missing,
+      tracked: trackedPaths,
+      action: status === 'degraded'
+        ? 'Run `npx @ericrisco/rsc sync`; the OMP bridge loads these memory modules from `.rsc/`.'
+        : null,
+      trustRequired: false,
+    };
+  }
   const paths = recorded?.paths?.length ? recorded.paths : memoryManagedPaths(target, cwd);
   const configPath = join(cwd, ...CONFIG[target].split('/'));
   const cursorRule = join(cwd, '.cursor', 'rules', 'rsc-memory.mdc');
@@ -251,6 +289,9 @@ export function inspectMemoryWiring(target, cwd = process.cwd(), recorded = null
 
 export function unwireMemory(target, cwd = process.cwd()) {
   if (!MEMORY_TARGETS[target]) return [];
+  // Nothing to strip: OMP's switch is the bridge module itself, and the shared `.rsc/` modules
+  // may serve another installed assistant. Purge removes them all.
+  if (target === 'omp') return [];
   const path = join(cwd, ...CONFIG[target].split('/'));
   const touched = [];
   if (target === 'opencode') {
@@ -269,6 +310,7 @@ export function unwireMemory(target, cwd = process.cwd()) {
 
 export function memoryArtifactsPresent(target, cwd = process.cwd()) {
   if (!MEMORY_TARGETS[target]) return [];
+  if (target === 'omp') return commonPaths(cwd).filter(existsSync);
   const out = commonPaths(cwd).filter(existsSync);
   const config = join(cwd, ...CONFIG[target].split('/'));
   if (existsSync(config)) {

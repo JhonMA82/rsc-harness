@@ -32,7 +32,7 @@ const EVENTS = Object.freeze({
   cursor: [['beforeSubmitPrompt', 'request'], ['afterAgentResponse', 'turn']],
 });
 
-export const KNOWLEDGE_TARGETS = Object.freeze(Object.keys(CONFIG));
+export const KNOWLEDGE_TARGETS = Object.freeze(['omp', ...Object.keys(CONFIG)].sort());
 
 const git = (cwd, args) => {
   try { return execFileSync('git', args, { windowsHide: true, cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return null; }
@@ -130,13 +130,24 @@ export default {
 `;
 
 export function knowledgeManagedPaths(target, cwd = process.cwd()) {
-  if (!CONFIG[target]) return [];
-  return [join(cwd, '.rsc', 'knowledge-sync.mjs'), join(cwd, '.rsc', 'trunk-policy.mjs'), join(cwd, ...CONFIG[target].split('/'))];
+  if (!KNOWLEDGE_TARGETS.includes(target)) return [];
+  const modules = [join(cwd, '.rsc', 'knowledge-sync.mjs'), join(cwd, '.rsc', 'trunk-policy.mjs')];
+  // OMP calls the module from the hook bridge; there is no per-assistant config file.
+  return CONFIG[target] ? [...modules, join(cwd, ...CONFIG[target].split('/'))] : modules;
 }
 
 /** Wire it. Always, when the assistant supports it: being off is the runtime's `.no-knowledge-sync`. */
 export function wireKnowledge(target, cwd = process.cwd()) {
-  if (!CONFIG[target]) return { mode: 'unsupported', paths: [] };
+  if (!KNOWLEDGE_TARGETS.includes(target)) return { mode: 'unsupported', paths: [] };
+  if (target === 'omp') {
+    const script = join(cwd, '.rsc', 'knowledge-sync.mjs');
+    mkdirSync(dirname(script), { recursive: true });
+    copyFileSync(join(HERE, 'knowledge-sync.mjs'), script);
+    copyFileSync(join(HERE, 'trunk-policy.mjs'), join(cwd, '.rsc', 'trunk-policy.mjs'));
+    const paths = knowledgeManagedPaths(target, cwd);
+    for (const path of paths) exclude(cwd, path);
+    return { mode: 'wired', paths };
+  }
   const configPath = join(cwd, ...CONFIG[target].split('/'));
   if (tracked(cwd, configPath)) return { mode: 'degraded', reason: 'config-tracked', paths: [] };
   if (target === 'opencode' && existsSync(configPath) && !readFileSync(configPath, 'utf8').includes(PLUGIN_MARKER)) {
@@ -174,7 +185,7 @@ export function wireKnowledge(target, cwd = process.cwd()) {
 }
 
 export function unwireKnowledge(target, cwd = process.cwd()) {
-  if (!CONFIG[target]) return [];
+  if (target === 'omp' || !CONFIG[target]) return [];
   const path = join(cwd, ...CONFIG[target].split('/'));
   const touched = [];
   if (target === 'opencode') {
@@ -187,7 +198,9 @@ export function unwireKnowledge(target, cwd = process.cwd()) {
 }
 
 export function knowledgeArtifactsPresent(target, cwd = process.cwd()) {
-  if (!CONFIG[target]) return [];
+  if (!KNOWLEDGE_TARGETS.includes(target)) return [];
+  const modules = [join(cwd, '.rsc', 'knowledge-sync.mjs'), join(cwd, '.rsc', 'trunk-policy.mjs')].filter(existsSync);
+  if (!CONFIG[target]) return modules;
   const out = [join(cwd, '.rsc', 'knowledge-sync.mjs')].filter(existsSync);
   const path = join(cwd, ...CONFIG[target].split('/'));
   if (existsSync(path)) {

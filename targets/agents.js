@@ -40,6 +40,10 @@ const AGENT_TARGETS = {
   // restrict-only: rsc never grants a tool there, it can only take away what a role never declared,
   // so a stricter project permission policy is never loosened by an rsc agent.
   opencode: { dir: '.opencode/agents', ext: '.md', format: 'md', mode: 'subagent', toolsFormat: 'restrict', model: () => null, legacyModel: (t) => `anthropic/${TIER_MODEL.anthropic[t]}` },
+  // OMP routes task agents through its own model roles and inherits the session model when the
+  // frontmatter carries no `model:`. Generated agents stay silent on purpose; pin one per project
+  // with `rsc agent-model omp <selector>`.
+  omp: { dir: '.omp/agents', ext: '.md', format: 'md', toolsFormat: 'omp', model: () => null },
   gemini: { dir: '.gemini/agents', ext: '.md', format: 'md', model: (t) => TIER_MODEL.google[t] },
   copilot: { dir: '.github/agents', ext: '.agent.md', format: 'md', model: (t) => TIER_MODEL.anthropic[t] },
   kiro: { dir: '.kiro/agents', ext: '.json', format: 'json', model: (t) => (t === 'heavy' ? 'claude-opus-4' : 'claude-sonnet-4') },
@@ -213,6 +217,10 @@ export function writeDeveloperTier(cwd, tier) {
 // OpenCode V1 tool names a declared capability maps to. `read`/`search` need nothing: what the agent
 // may read is the project's policy to decide, and saying `read: true` would be a grant.
 const RESTRICT_TOOLS = { edit: ['edit', 'write', 'patch'], shell: ['bash'] };
+// rsc's capability names predate any one assistant. OMP's built-in tool is `bash`, and it accepts
+// `search` as a legacy alias for `grep`, but being explicit keeps an unknown alias from silently
+// granting nothing (or everything) in a future release.
+const OMP_TOOLS = { search: 'grep', shell: 'bash' };
 function restrictedTools(tools) {
   if (!tools) return [];
   return Object.entries(RESTRICT_TOOLS).filter(([cap]) => !tools.includes(cap)).flatMap(([, names]) => names);
@@ -232,6 +240,8 @@ function renderMd(spec, model, agent, toolsFormat = spec.toolsFormat) {
     } else if (toolsFormat === 'map') {
       fm.push('tools:');
       for (const tool of agent.tools) fm.push(`  ${tool}: true`);
+    } else if (toolsFormat === 'omp') {
+      fm.push(`tools: [${agent.tools.map((tool) => OMP_TOOLS[tool] || tool).join(', ')}]`);
     } else {
       fm.push(`tools: [${agent.tools.join(', ')}]`);
     }

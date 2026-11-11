@@ -167,7 +167,7 @@ test('capabilities: the agent-capable partition is exactly the declared one', ()
   const cwd = tmp(); const home = tmp();
   const withAgents = TARGET_IDS.filter((t) => targetHasAgents(t));
   assert.deepEqual([...withAgents].sort(), [...AGENT_TARGET_IDS].sort());
-  assert.equal(withAgents.length, 8, 'if this changes, update the spec and the docs that quote the number');
+  assert.equal(withAgents.length, 9, 'if this changes, update the spec and the docs that quote the number');
   assert.equal(TARGET_IDS.length - withAgents.length, 10);
   for (const t of TARGET_IDS.filter((x) => !targetHasAgents(x))) {
     const r = listAgents({ target: t, home, cwd });

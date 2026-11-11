@@ -16,7 +16,7 @@ const SEAM = '\n\n';
 // Most assistants that read a rules file have no session-start hook, so nothing checks for a new rsc
 // on its own. The agent does it instead. Here and not in suggest's body: the body is paid on every
 // turn by every assistant, Claude Code included, which already checks from its hook.
-export const UPDATE_NOTE = '**rsc updates.** Claude Code, Codex, Gemini CLI, Cursor and OpenCode check for a new rsc on their '
+export const UPDATE_NOTE = '**rsc updates.** Claude Code, Codex, Gemini CLI, Cursor, OpenCode and Oh My Pi check for a new rsc on their '
   + 'own. In any other assistant, run `node .rsc/auto-update.mjs` once on the first turn of a session and relay any '
   + 'notice it prints in one line; "up to date" needs no mention.\n';
 

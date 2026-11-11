@@ -10,7 +10,7 @@ import { expectedAgentsFor } from '../scripts/lib/onboarding-apply.js';
 import { TARGET_IDS } from '../targets/index.js';
 import { AGENT_TARGET_IDS } from '../targets/agents.js';
 
-// Nine of the seventeen assistants have no notion of a subagent. The plan computes ONE list of
+// Ten of the nineteen assistants have no notion of a subagent. The plan computes ONE list of
 // agents for the whole project, and the verifier used to demand that list from every target — so
 // onboarding could never complete on any of the nine. Because the failure rolls back, the person
 // was left with empty directory shells, no harness, and a recovery command that walks back into the
@@ -30,7 +30,7 @@ test('the ten agentless targets are expected to hold no agents', () => {
 
 // Relaxing the check must not blind it: a target that CAN hold agents is still held to the policy,
 // which is the entire reason the check exists.
-test('the eight agent-capable targets are still held to the policy', () => {
+test('the nine agent-capable targets are still held to the policy', () => {
   for (const target of AGENT_TARGET_IDS) {
     assert.deepEqual(expectedAgentsFor(target, plan(['developer'])), ['developer'], target);
   }

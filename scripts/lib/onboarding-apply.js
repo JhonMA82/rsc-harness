@@ -38,8 +38,8 @@ function retiredGovernedPaths(cwd, plan) {
  * What THIS target should be holding, which is not the same question as what the project decided.
  *
  * The policy is the PROJECT's: "these are the agents this project wants." Whether an assistant can
- * hold a subagent at all is the TARGET's business, and nine of the seventeen cannot — amp, jules,
- * zed, antigravity, windsurf, cline, roo, continue and aider have no such concept. The installer
+ * hold a subagent at all is the TARGET's business, and ten of the nineteen cannot — amp, jules,
+ * zed, antigravity, windsurf, cline, roo, continue, aider and deepseek have no such concept. The installer
  * always knew this and correctly wrote none; the verifier did not, and demanded the project's list
  * from every target, so onboarding could never complete on any of the nine. Since the failure rolls
  * back, what the person got was empty directory shells and no harness — with a recovery command

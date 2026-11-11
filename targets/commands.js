@@ -11,6 +11,9 @@ const COMMAND_TARGETS = Object.freeze({
   windsurf: { dir: '.windsurf/workflows', ext: '.md', format: 'windsurf' },
   cline: { dir: '.clinerules/workflows', ext: '.md', format: 'plain', invocationSuffix: '.md' },
   roo: { dir: '.roo/commands', ext: '.md', format: 'roo' },
+  // OMP exposes every discovered skill as `/skill:<name>`; a second file command per skill would
+  // only compete with its own built-ins and add noise to the slash palette.
+  omp: { dir: '.omp/commands', ext: '.md', format: 'omp', skillsAreCommands: true },
 });
 
 export const COMMAND_TARGET_IDS = Object.freeze(Object.keys(COMMAND_TARGETS));
@@ -152,7 +155,7 @@ export function commandPath(target, cwd, name) {
 }
 
 function renderArgs(target, body) {
-  const placeholder = target === 'claude' || target === 'opencode' ? '$ARGUMENTS'
+  const placeholder = target === 'claude' || target === 'opencode' || target === 'omp' ? '$ARGUMENTS'
     : target === 'gemini' ? '{{args}}'
       : 'any text following the slash command';
   return body.replaceAll('{{ARGS}}', placeholder);

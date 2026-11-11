@@ -87,7 +87,7 @@ test('Go, C++ and Python source receipts are dated and primary', () => {
   }
 });
 
-test('a requested stack agent renders natively with its declared tools on all 8 targets', () => {
+test('a requested stack agent renders natively with its declared tools on all 9 targets', () => {
   assert.equal(typeof agents.writeAgents, 'function');
   for (const target of agents.AGENT_TARGET_IDS) {
     const cwd = mkdtempSync(join(tmpdir(), `rsc-stack-${target}-`));
@@ -107,6 +107,9 @@ test('a requested stack agent renders natively with its declared tools on all 8 
       // tools it never declared, and is granted nothing.
       assert.match(text, /^tools:\n {2}edit: false\n {2}write: false\n {2}patch: false\n {2}bash: false$/m);
       assert.doesNotMatch(text, /: true$/m);
+    } else if (target === 'omp') {
+      // OMP names the tool `grep`; `search` survives only as its legacy alias.
+      assert.match(text, /^tools: \[read, grep\]$/m);
     } else {
       assert.match(text, /^tools: \[read, search\]$/m);
     }

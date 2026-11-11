@@ -318,16 +318,16 @@ test('AC#22 — the marker that remembers the "no" is machine-local, never commi
   assert.match(ignore, /^\.rsc\/$/m, 'the opt-out lives under .rsc/, which must stay out of git');
 });
 
-// ── the 15 targets with no hooks ─────────────────────────────────────────────────────────────────
+// ── the targets with no hooks ─────────────────────────────────────────────────────────────────────
 //
 // Two mechanisms for one contract: the committed bootstrap covers the targets that inject hooks; the
-// other fifteen read a markdown body instead, so for them the instruction has to live in the
+// rest read a markdown body instead, so for them the instruction has to live in the
 // always-on surface — where it is paid for on EVERY turn, by everyone, including the overwhelming
 // majority whose harness is fine. That is why it is three lines folded into the section that already
 // recognises a broken harness, and not a section of its own, and why the ceiling below is a test
 // rather than an intention. The repo's own scar is 207 KB paid per turn (P5).
 
-test('AC#10 — the always-on surface tells the 15 hookless targets the same three things', () => {
+test('AC#10 — the always-on surface tells the hookless targets the same three things', () => {
   // Normalised: an assertion about prose must not depend on where a line happened to wrap.
   const body = readFileSync(new URL('../skills/suggest/SKILL.md', import.meta.url), 'utf8').replace(/\s+/g, ' ');
   assert.match(body, /catalogVersion in \.rsc\.json/, 'it must name the pin as the version to install');
@@ -382,7 +382,7 @@ test('AC#25 — the README describes the clone by symptom, and says the assistan
 // feature missing: building a clone worked, converging a stale one did not.
 //
 // `.rsc/skills/<id>` is the canonical location and it is the same on every assistant — the per-target
-// directories are links into it — so one rule covers all seventeen without teaching this file any
+// directories are links into it — so one rule covers all nineteen without teaching this file any
 // target's layout.
 
 function mountedWithSkills(installed, declared, own = []) {

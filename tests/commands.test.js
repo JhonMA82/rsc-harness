@@ -62,15 +62,15 @@ test('command validator enforces backing, size and a failing mutant', () => {
 });
 
 test('native command targets render their real format and Codex stays unsupported', () => {
-  const expected = ['claude', 'cursor', 'gemini', 'opencode', 'copilot', 'windsurf', 'cline', 'roo'];
+  const expected = ['claude', 'cursor', 'gemini', 'opencode', 'copilot', 'windsurf', 'cline', 'roo', 'omp'];
   assert.deepEqual([...commands.COMMAND_TARGET_IDS].sort(), expected.sort());
   assert.equal(commands.targetHasCommands('codex'), false);
   for (const target of expected) {
     const cwd = repo();
     const resolved = commands.resolveCommands({ target, skills: ['plan'], agents: [], memoryMode: 'unsupported' });
     const command = resolved.find((candidate) => candidate.name === 'plan');
-    if (target === 'claude') {
-      assert.equal(command, undefined, 'Claude skips skill-backed plan');
+    if (target === 'claude' || target === 'omp') {
+      assert.equal(command, undefined, `${target} exposes installed skills natively`);
       continue;
     }
     const result = commands.reconcileCommands(target, cwd, [], [command]);

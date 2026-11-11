@@ -4,7 +4,7 @@ import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { resolve, join, dirname, isAbsolute, sep } from 'node:path';
 import { capture, otherActiveSessions, resume } from './session-memory-core.mjs';
 
-const LOCAL_TARGETS = new Set(['claude', 'codex', 'cursor', 'deepseek', 'gemini', 'opencode']);
+const LOCAL_TARGETS = new Set(['claude', 'codex', 'cursor', 'deepseek', 'gemini', 'omp', 'opencode']);
 
 function projectSettings(cwd) {
   try {
@@ -68,8 +68,8 @@ function isRemote(target, native) {
 function hookEventName(target, event, native) {
   if (native?.hook_event_name) return native.hook_event_name;
   const names = {
-    start: target === 'cursor' ? 'sessionStart' : 'SessionStart',
-    request: target === 'gemini' ? 'BeforeAgent' : 'UserPromptSubmit',
+    start: target === 'cursor' ? 'sessionStart' : target === 'omp' ? 'session_start' : 'SessionStart',
+    request: target === 'gemini' ? 'BeforeAgent' : target === 'omp' ? 'before_agent_start' : 'UserPromptSubmit',
     edit: target === 'cursor' ? 'afterFileEdit' : target === 'gemini' ? 'AfterTool' : 'PostToolUse',
     boundary: target === 'cursor' ? 'afterShellExecution' : target === 'gemini' ? 'AfterTool' : 'PostToolUse',
     turn: target === 'cursor' ? 'afterAgentResponse' : target === 'gemini' ? 'AfterAgent' : 'Stop',

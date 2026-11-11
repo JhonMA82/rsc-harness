@@ -14,6 +14,7 @@ import { isEnabled, checkSello, readSello, countFindings, readEffectiveConfig, v
 import { countGaps, listSkills, listAgents } from './lib/capabilities.js';
 import { resolveCommands, commandPath, targetHasCommands } from '../targets/commands.js';
 import { inspectMemoryWiring } from '../targets/memory.js';
+import { inspectOmpBridge } from '../targets/omp-bridge.js';
 import { metricsSummary } from '../targets/session-memory-core.mjs';
 import { agentPath, targetHasAgents, effectiveAgentModel } from '../targets/agents.js';
 import { projectOptOuts } from '../targets/opt-outs.js';
@@ -237,12 +238,16 @@ export function doctor({ target, home, cwd }) {
     const path = agentPath(target, root, id);
     return path && !existsSync(path);
   }).map((id) => ({ id, path: agentPath(target, root, id), action: 'Run `npx @ericrisco/rsc sync` to restore this managed agent.' }));
+  // OMP has no settings file to inspect: its hook is a loader under `.omp/` that imports the real
+  // bridge from `.rsc/`. Missing either half is a session where memory and guards simply do nothing.
+  const ompBridge = target === 'omp' ? inspectOmpBridge(root, state.policy || {}) : null;
   const report = {
     target,
     installed: Object.keys(state.skills),
     missing: [],
     // Wired means it can actually run, not merely that the file declaring it is there.
-    hookWired: existsSync(paths.hookTarget) && missingHookScripts({ target, home, cwd }).length === 0,
+    hookWired: existsSync(paths.hookTarget) && missingHookScripts({ target, home, cwd }).length === 0
+      && (!ompBridge || ompBridge.mode === 'wired'),
     manifestSkills: manifest.counts.skills,
     backups: {
       exists: existsSync(join(root, '.rsc', 'backups')),
@@ -250,6 +255,7 @@ export function doctor({ target, home, cwd }) {
       latest: backups[0]?.id || null,
     },
     contextBudget: contextBudget({ target, home, cwd }),
+    ompBridge,
     // The worktree cleanup's trigger is a git hook, and `.git/hooks/` is not cloned. So a repo can
     // carry a perfectly healthy harness and still never clean up, on every machine but the one that
     // ran the installer. Reported, never nagged about: `repair` is what puts it back (P6).

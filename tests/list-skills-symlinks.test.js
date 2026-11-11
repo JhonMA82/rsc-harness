@@ -8,7 +8,7 @@ import { targetPaths } from '../targets/index.js';
 
 // A skill is a directory with a SKILL.md in it. HOW you get there — a real directory or a symlink —
 // is the installer's business, and it deliberately differs per platform: links on macOS and Linux so
-// seventeen assistants share one copy, real files on Windows where relative dir symlinks need
+// nineteen assistants share one copy, real files on Windows where relative dir symlinks need
 // Developer Mode. Counting them must not depend on that choice, and it did: `Dirent.isDirectory()`
 // describes the LINK, never its target, so every linked skill was invisible — and the `&&`
 // short-circuited before the `existsSync` that would have followed it.

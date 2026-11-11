@@ -258,7 +258,7 @@ export function buildOnboardingPlan(record, evidence) {
   const baseAgents = practisesSdd;
   const hooks = practisesSdd;
   const agents = baseAgents ? resolveAgentNames(skills, []).sort() : [];
-  const gitmojiGuard = hooks && normalized.targets.includes('claude');
+  const gitmojiGuard = hooks && normalized.targets.some((target) => target === 'claude' || target === 'omp');
   // The danger guard is NOT code machinery, and tying it to `hooks` was the mistake behind #273. The
   // three guards above need a code project with git — a branch to protect, a commit to lint. This one
   // stops recursive deletes, history-rewriting pushes and friends, which are exactly as irreversible
@@ -312,8 +312,8 @@ export function buildOnboardingPlan(record, evidence) {
     ? selected('code-hooks', 'hook', 'The accepted software workflow needs its deterministic code gates.')
     : deferred('code-hooks', 'hook', 'Code-only gates would add unrelated behavior to this project.', ['a substantial software workflow is accepted'], softwareTriggers));
   decisions.push(gitmojiGuard
-    ? selected('gitmoji-guard', 'guard', 'Claude Code supports the commit guard and the accepted code policy includes it.')
-    : deferred('gitmoji-guard', 'guard', 'No selected target and project policy justify this Claude-only commit guard.', ['Claude Code is selected and a governed software workflow adopts the convention'], [{ type: 'software-trigger-and-claude' }]));
+    ? selected('gitmoji-guard', 'guard', 'The selected assistant supports the commit guard and the accepted code policy includes it.')
+    : deferred('gitmoji-guard', 'guard', 'No selected target and project policy justify this commit guard.', ['Claude Code or Oh My Pi is selected and a governed software workflow adopts the convention'], [{ type: 'software-trigger-and-claude' }]));
   decisions.push(selected('memory', 'capability', 'Local bounded project memory supports continuity without an external account.'));
   decisions.push(selected('harness-documents', 'route', 'The accepted profile and plan are persisted under 02-DOCS/wiki/harness/.'));
   decisions.push(excluded('context7', 'integration', 'External MCP connections require a separate, provider-specific consent flow and are outside this local harness plan.'));
@@ -409,7 +409,7 @@ export function recommendDeferredComponents(acceptedPlan, currentEvidence) {
     if (rule.type === 'source-growth') return facts.grewBy >= rule.atLeast;
     if (rule.type === 'complexity-added') return facts.addedComplexity >= rule.atLeast;
     if (rule.type === 'manifest-with-implementation') return facts.manifestWithImplementation;
-    if (rule.type === 'software-trigger-and-claude') return acceptedPlan.record.targets.includes('claude') && (facts.grewBy >= 5 || facts.addedComplexity > 0 || facts.manifestWithImplementation);
+    if (rule.type === 'software-trigger-and-claude') return acceptedPlan.record.targets.some((target) => target === 'claude' || target === 'omp') && (facts.grewBy >= 5 || facts.addedComplexity > 0 || facts.manifestWithImplementation);
     return false;
   };
   return (acceptedPlan.decisions || [])

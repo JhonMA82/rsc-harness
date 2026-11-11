@@ -46,6 +46,9 @@ const SPEC = {
   opencode: { root: '.opencode/rsc', hook: 'AGENTS.md', adapter: 'md' },
   // DeepSeek Harness discovers <root>/.dsh/skills/<name>/SKILL.md natively.
   deepseek: { root: '.dsh/skills', hook: 'AGENTS.md', adapter: 'md' },
+  // Oh My Pi discovers <root>/.omp/skills/<name>/SKILL.md natively and reads
+  // <root>/.omp/AGENTS.md as project context.
+  omp: { root: '.omp/skills', hook: '.omp/AGENTS.md', adapter: 'md' },
   amp: { root: '.amp/rsc', hook: 'AGENTS.md', adapter: 'md' },
   jules: { root: '.jules/rsc', hook: 'AGENTS.md', adapter: 'md' },
   zed: { root: '.zed/rsc', hook: 'AGENTS.md', adapter: 'md' },
@@ -81,6 +84,7 @@ export const TARGETS = [
   { id: 'amp', label: 'Amp', hint: 'AGENTS.md' },
   { id: 'opencode', label: 'opencode', hint: 'AGENTS.md' },
   { id: 'deepseek', label: 'DeepSeek Harness', hint: '.dsh/skills/' },
+  { id: 'omp', label: 'Oh My Pi', hint: '.omp/skills/' },
   { id: 'jules', label: 'Jules', hint: 'AGENTS.md' },
   { id: 'junie', label: 'JetBrains Junie', hint: '.junie/guidelines.md' },
   { id: 'kiro', label: 'Kiro', hint: '.kiro/steering/' },
@@ -122,6 +126,7 @@ export function detectTarget(cwd = process.cwd()) {
   if (has('.zed')) return 'zed';
   if (has('.opencode')) return 'opencode';
   if (has('.dsh')) return 'deepseek';
+  if (has('.omp')) return 'omp';
   if (has('.amp')) return 'amp';
   if (has('.jules')) return 'jules';
   if (has('.antigravity')) return 'antigravity';

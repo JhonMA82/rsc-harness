@@ -27,6 +27,7 @@ import { wireUpdate, unwireUpdate, updateManagedPaths, updateArtifactsPresent } 
 import { wireKnowledge, unwireKnowledge, knowledgeManagedPaths, knowledgeArtifactsPresent } from '../targets/knowledge-wiring.js';
 import { wireGitPermissions, unwireGitPermissions, gitPermissionsPath } from '../targets/git-permissions.js';
 import { wireDeepseekBridge } from '../targets/deepseek-bridge.js';
+import { wireOmpBridge, unwireOmpBridge, ompBridgeManagedPaths, ompBridgeArtifactsPresent } from '../targets/omp-bridge.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CLI_VERSION = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version;
@@ -115,6 +116,9 @@ export function managedPathsForInstall({ skillIds, agentIds = [], target, home, 
   if (policy?.memory !== false) out.push(...memoryManagedPaths(target, cwd));
   out.push(...updateManagedPaths(target, cwd));
   out.push(...knowledgeManagedPaths(target, cwd));
+  // OMP's lifecycle lives in a project hook loader plus the shared `.rsc/` modules. The loader is
+  // committed, so it belongs in the backup and in the dry-run report like any generated file.
+  if (target === 'omp') out.push(...ompBridgeManagedPaths({ cwd, policy }));
   if (gitPermissionsPath(target, cwd)) out.push(gitPermissionsPath(target, cwd)); // backed up before it is merged into
   if (targetHasAgents(target)) {
     const state = readState(paths.stateFile);
@@ -339,6 +343,10 @@ export async function applyInstall({ skillIds = [], agentIds = [], target, home,
   state.knowledge = { mode: knowledgeResult.mode, reason: knowledgeResult.reason || null, paths: knowledgeResult.paths };
   // DeepSeek Harness only reads hooks through a machine-level bridge (targets/deepseek-bridge.js).
   if (target === 'deepseek') state.deepseekBridge = wireDeepseekBridge();
+  // OMP discovers `.omp/hooks/pre/*.js` but has no settings file, so rsc ships a thin loader that
+  // imports the real bridge from `.rsc/`. A sync without an explicit policy keeps the last accepted
+  // one, exactly as the guards it selects do.
+  if (target === 'omp') state.ompBridge = wireOmpBridge(cwd, policy || state.policy || {});
   if (gitPermissions === true) state.gitPermissions = wireGitPermissions(target, cwd);
   else if (gitPermissions === false) { unwireGitPermissions(target, cwd); state.gitPermissions = { mode: 'off' }; }
   const context7OptOut = join(cwd, '.rsc', '.no-context7');
@@ -668,6 +676,7 @@ export function removeTargetInstall({ target, home, cwd = process.cwd() }) {
   unwireUpdate(target, cwd);
   unwireKnowledge(target, cwd);
   unwireGitPermissions(target, cwd);
+  if (target === 'omp') ignored.push(...unwireOmpBridge(cwd));
   rmSync(paths.stateFile, { force: true });
   const gitignore = join(cwd, '.gitignore');
   if (existsSync(gitignore)) {
@@ -890,6 +899,7 @@ export async function purgeReport({ home, cwd = process.cwd(), withDocs = false,
         ...unwireUpdate(target, cwd),
         ...unwireKnowledge(target, cwd),
         ...unwireGitPermissions(target, cwd),
+        ...(target === 'omp' ? unwireOmpBridge(cwd) : []),
       ]) touchedConfigs.add(p);
       if (hadBootstrap && !existsSync(bootstrap)) removed.add(bootstrap);
     } else {
@@ -897,6 +907,7 @@ export async function purgeReport({ home, cwd = process.cwd(), withDocs = false,
         ...memoryArtifactsPresent(target, cwd),
         ...updateArtifactsPresent(target, cwd),
         ...knowledgeArtifactsPresent(target, cwd),
+        ...(target === 'omp' ? ompBridgeArtifactsPresent(cwd) : []),
       ]) touchedConfigs.add(p);
       if (paths.hookTarget && existsSync(paths.hookTarget)
         && /\.rsc\/|rsc-suggest:start|skills\/rsc\/suggest/.test(readFileSync(paths.hookTarget, 'utf8').replaceAll('\\\\', '/'))) {

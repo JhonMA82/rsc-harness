@@ -28,7 +28,7 @@ const CONFIG = Object.freeze({
 const EVENT = Object.freeze({ codex: 'SessionStart', deepseek: 'SessionStart', gemini: 'SessionStart', cursor: 'sessionStart' });
 
 /** Assistants where the update runs on its own. Every other one depends on the agent running it. */
-export const UPDATE_HOOK_TARGETS = Object.freeze(['claude', ...Object.keys(CONFIG)].sort());
+export const UPDATE_HOOK_TARGETS = Object.freeze(['claude', 'omp', ...Object.keys(CONFIG)].sort());
 
 const git = (cwd, args) => {
   try { return execFileSync('git', args, { windowsHide: true, cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return null; }
@@ -122,6 +122,8 @@ export function wireUpdate(target, cwd = process.cwd()) {
   // The Codex hook imports the MemSlop offer lazily, so it travels as a sibling for every target.
   const offer = join(cwd, '.rsc', 'memslop-offer.mjs');
   copyFileSync(join(HERE, 'memslop-offer.mjs'), offer);
+  // OMP runs it from the hook bridge: there is no config file to append an entry to.
+  if (target === 'omp') return { mode: 'hook', reason: 'bridge', paths: [module, offer] };
   if (!CONFIG[target]) {
     return { mode: target === 'claude' ? 'hook' : 'agent', paths: [module, offer] };
   }
@@ -151,7 +153,7 @@ export function wireUpdate(target, cwd = process.cwd()) {
 }
 
 export function unwireUpdate(target, cwd = process.cwd()) {
-  if (!CONFIG[target]) return [];
+  if (target === 'omp' || !CONFIG[target]) return [];
   const path = join(cwd, ...CONFIG[target].split('/'));
   const touched = [];
   if (target === 'opencode') {

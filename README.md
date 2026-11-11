@@ -15,7 +15,7 @@
 Keep your project knowledge, skills and working rules together across the assistants you already use.
 Start with your goal. Review what rsc proposes to install. Accept the plan before it changes your project.
 
-**MIT licensed · project-local setup · 18 assistant targets**
+**MIT licensed · project-local setup · 19 assistant targets**
 
 Give this URL to your agent and paste the request in the chat:
 
@@ -214,14 +214,15 @@ guaranteed business outcome.
 
 ### Hooks and guards
 
-In Claude Code, hooks enforce what instructions only ask for: the lane decisor on every turn, a
-refusal before a commit on a closed `main`, a confirmation before destructive commands, and a nudge
-to write the feature document before the first code edit. Every refusal says how to carry on. The
-rules only see what the **agent** runs; a person committing in their own terminal is never touched.
+In Claude Code and Oh My Pi, hooks enforce what instructions only ask for: the lane decisor on every
+turn, a refusal before a commit on a closed `main`, a confirmation before destructive commands, and a
+nudge to write the feature document before the first code edit. Every refusal says how to carry on.
+The rules only see what the **agent** runs; a person committing in their own terminal is never
+touched.
 
-> **Limit, stated plainly.** Those guards run in **Claude Code**. In Codex, Gemini, Cursor and
-> OpenCode the same rules travel in the skills and the session memory. They are followed, but no hook
-> enforces them.
+> **Limit, stated plainly.** Those guards run in **Claude Code** and **Oh My Pi**. In Codex, Gemini,
+> Cursor and OpenCode the same rules travel in the skills and the session memory. They are followed,
+> but no hook enforces them.
 
 ### Working as a team
 
@@ -257,8 +258,8 @@ new    · clones main    has it all after the first message
 - **It never** pushes to `main`, pushes your code, brings in anybody else's code, syncs your personal
   `user-profile.md`, or overwrites a file you are editing.
 
-It runs in the turn hooks of Claude Code, Codex, Gemini, Cursor, OpenCode and DeepSeek Harness. It is
-a **project** switch: if one person stopped sending, the rest would stop seeing their work.
+It runs in the turn hooks of Claude Code, Codex, Gemini, Cursor, OpenCode, DeepSeek Harness and Oh My
+Pi. It is a **project** switch: if one person stopped sending, the rest would stop seeing their work.
 
 #### Sharing the harness through git
 
@@ -300,7 +301,7 @@ commit on a closed `main` is still refused. It is saved as `gitPermissions` in `
 | Codex | `.codex/rules/rsc-git.rules` (force-push → `prompt`) |
 | Gemini | `.gemini/settings.json` → `tools.allowed` |
 | OpenCode | `opencode.json`: the `permissions` list on OpenCode 2, `permission.bash` on 1.x. An `opencode.jsonc` is never rewritten; rsc prints the rules to paste. |
-| Cursor, DeepSeek Harness | Not covered: neither has a safe per-command allow list. |
+| Cursor, DeepSeek Harness, Oh My Pi | Not covered: none has a safe per-command allow list. |
 
 `rsc git-permissions status | on | off` explains, per assistant, what rsc controls and what is left
 to the assistant.
@@ -311,8 +312,8 @@ On supported local targets, rsc checkpoints observable repository state (branch,
 changed paths, commits, SDD status) and injects it before the first action of a new session in the
 same checkout.
 
-- **Full:** Claude Code, Codex, Gemini CLI, OpenCode and DeepSeek Harness. Codex asks you to trust the
-  project hook once with `/hooks`.
+- **Full:** Claude Code, Codex, Gemini CLI, OpenCode, DeepSeek Harness and Oh My Pi. Codex asks you to
+  trust the project hook once with `/hooks`.
 - **Assisted:** Cursor desktop, through an always-on rule that reads before acting.
 - **Never cloud:** the memory runtime makes no network request.
 
@@ -367,6 +368,7 @@ The wizard asks which ones; `--target a,b` does it non-interactively.
 | `amp` | `.amp/rsc/<id>/` → symlink | block in `AGENTS.md` |
 | `opencode` | `.opencode/rsc/<id>/` → symlink | block in `AGENTS.md` |
 | `deepseek` | `.dsh/skills/<id>/` → symlink (discovered natively) | block in `AGENTS.md` |
+| `omp` | `.omp/skills/<id>/` → symlink (discovered natively) | block in `.omp/AGENTS.md` |
 | `jules` | `.jules/rsc/<id>/` → symlink | block in `AGENTS.md` |
 | `junie` | `.junie/rsc/<id>/` → symlink | block in `.junie/guidelines.md` |
 | `kiro` | `.kiro/rsc/<id>/` → symlink | doc in `.kiro/steering/rsc-suggest.md` |
@@ -379,6 +381,10 @@ The wizard asks which ones; `--target a,b` does it non-interactively.
 > block to `~/.dsh/cordis.patch.yml` that runs the hooks of whichever project the session is in.
 > Restart dsh once after the first install; delete the block to turn it off.
 
+> **Oh My Pi** (`omp`) discovers project hooks under `.omp/hooks/pre/`. rsc commits one thin loader
+> there that imports the machine-local bridge from `.rsc/`; in a fresh clone without the harness the
+> loader stays silent until `rsc sync` rebuilds it.
+
 | Targets | Stack agents | Native commands | Session memory |
 | --- | --- | --- | --- |
 | Claude Code | yes | agent + memory entries | full |
@@ -386,6 +392,7 @@ The wizard asks which ones; `--target a,b` does it non-interactively.
 | Cursor desktop | yes | yes | assisted |
 | Gemini CLI, OpenCode | yes | yes | full |
 | DeepSeek Harness | unsupported | unsupported | full (machine bridge) |
+| Oh My Pi | yes | yes | full |
 | GitHub Copilot | yes | yes | unsupported |
 | Junie, Kiro | yes | unsupported | unsupported |
 | Windsurf, Cline, Roo | unsupported | yes | unsupported |
@@ -393,9 +400,9 @@ The wizard asks which ones; `--target a,b` does it non-interactively.
 
 `manifest.json` is the generated public inventory: 34 agents (5 base + 29 selective specialists) and
 53 command entries (20 fixed + 33 stack aliases). Unsupported means rsc writes nothing for that
-surface. Generated agents carry no `model:` on OpenCode, so they use the session's model; pin one for
-the team with `rsc agent-model <target> <model>`. If you edit a generated agent, `rsc sync` keeps your
-file, and `rsc agents reset <name>` takes rsc's version back after a backup.
+surface. Generated agents carry no `model:` on OpenCode or Oh My Pi, so they use the session's model;
+pin one for the team with `rsc agent-model <target> <model>`. If you edit a generated agent,
+`rsc sync` keeps your file, and `rsc agents reset <name>` takes rsc's version back after a backup.
 
 ---
 
@@ -625,9 +632,9 @@ The harness is built on ten principles. Three of them shape everything else:
 - **Friction proportional to risk.** Silence for the trivial, ceremony only where failure is
   expensive. A harness that nags on harmless work gets switched off.
 
-**Known limits, stated openly:** the hard guards run only in Claude Code; OpenCode 2 and Windows have
-had less real-world testing than macOS and Linux; and the session memory is local by design, never
-cloud.
+**Known limits, stated openly:** the hard guards run in Claude Code and Oh My Pi; OpenCode 2 and
+Windows have had less real-world testing than macOS and Linux; and the session memory is local by
+design, never cloud.
 
 ---
 

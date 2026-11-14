@@ -11,6 +11,18 @@ export async function ask(question) {
   return a.trim();
 }
 
+// Ask until there is an answer. A required free-text question asked exactly once let an empty line
+// travel through the whole questionnaire: onboarding cancelled only after the assistant picker, so
+// the last answer looked like the one that had been refused. `askFn` is injectable so the re-ask is
+// testable without a terminal.
+export async function askRequired(question, hint, askFn = ask) {
+  for (;;) {
+    const answer = String((await askFn(question)) ?? '').trim();
+    if (answer) return answer;
+    if (hint) say(hint);
+  }
+}
+
 export function say(...lines) {
   console.log(...lines);
 }
@@ -166,6 +178,8 @@ function captureKeys(onKey) {
 }
 
 // Single choice: ↑↓ to move, Enter to pick. options: [{ key, label }].
+// Enter arrives as `return` (CR) or `enter` (LF) depending on the terminal — and on whether the
+// pty translated a key typed in the gap before raw mode was set. Both are the same key to the person.
 function tuiSelect(question, options) {
   return new Promise((resolve) => {
     let i = 0;
@@ -180,7 +194,7 @@ function tuiSelect(question, options) {
     const stop = captureKeys((str, key) => {
       if (key.name === 'up' || key.name === 'k') { i = (i - 1 + options.length) % options.length; render(); }
       else if (key.name === 'down' || key.name === 'j') { i = (i + 1) % options.length; render(); }
-      else if (key.name === 'return') { stop(); resolve(options[i].key); }
+      else if (key.name === 'return' || key.name === 'enter') { stop(); resolve(options[i].key); }
       else if (key.name === 'escape') { stop(); resolve(null); }              // back / cancel
       else if (key.ctrl && key.name === 'c') { stop(); stdout.write('\n'); process.exit(130); } // hard quit
     });
@@ -217,7 +231,7 @@ function tuiChecklist(title, items) {
       else if (key.name === 'down' || key.name === 'j') { cur = (cur + 1) % items.length; render(); }
       else if (key.name === 'space') { sel.has(cur) ? sel.delete(cur) : sel.add(cur); render(); }
       else if (str === 'a') { if (sel.size === items.length) sel.clear(); else items.forEach((_, idx) => sel.add(idx)); render(); }
-      else if (key.name === 'return') { stop(); resolve([...sel].sort((x, y) => x - y).map((idx) => items[idx].id)); }
+      else if (key.name === 'return' || key.name === 'enter') { stop(); resolve([...sel].sort((x, y) => x - y).map((idx) => items[idx].id)); }
       else if (key.name === 'escape') { stop(); resolve(null); }              // back without changing
       else if (key.ctrl && key.name === 'c') { stop(); stdout.write('\n'); process.exit(130); } // hard quit
     });

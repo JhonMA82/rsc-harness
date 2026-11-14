@@ -11,7 +11,7 @@ import {
   effectiveAgentModel, writeAgentsDetailed, readDeveloperTier, AGENT_MODEL_INHERIT, AGENT_TARGET_IDS,
 } from '../targets/agents.js';
 import { doctor } from './doctor.js';
-import { ask, say, select, pickFrom, banner, confirm, isInteractive } from './lib/ui.js';
+import { askRequired, say, select, pickFrom, banner, confirm, isInteractive } from './lib/ui.js';
 import { refreshRegistry, registryStatus } from './lib/registry.js';
 import { audit, writeAuditReport, recordAuditBaseline } from './audit.js';
 import { DOMAINS } from './lib/domains.js';
@@ -226,12 +226,17 @@ async function runOnboarding(targets) {
   if (isInteractive() && missingOnboardingFields(raw).length) {
     await banner(loadManifest().counts.skills);
     say('Before rsc writes anything, it will learn how to help and show the exact harness plan.');
+    // Esc means "back", and here there is no earlier screen to return to: stop at the question where
+    // it was pressed. Walking on through the rest only to cancel at the very end made the last answer
+    // look like the one that had been refused.
+    const cancel = () => { say('Cancelled — nothing was touched.'); };
     // One question about the person, not two: the register. `--technical-level mixed` is still
     // accepted from the command line and reads like non-technical — with analogies.
     raw.technicalLevel ||= await select('How should I talk to you?', [
       { key: 'technical', label: 'Technical — assume I am comfortable with code and tooling' },
       { key: 'non-technical', label: 'With analogies and plain words — explain terms, no jargon' },
     ]);
+    if (!raw.technicalLevel) return cancel();
     raw.projectKind ||= await select('What are you building or running?', [
       { key: 'software', label: 'Software or a website' },
       { key: 'operations', label: 'Operations, a company or a process' },
@@ -239,13 +244,22 @@ async function runOnboarding(targets) {
       { key: 'content', label: 'Content or publishing' },
       { key: 'mixed', label: 'A combination of these' },
     ]);
-    raw.goal ||= await ask('What do you want this project to achieve? > ');
+    if (!raw.projectKind) return cancel();
+    // The goal is the one required free-text answer, and it is checked HERE. An empty line used to
+    // be accepted and rejected only after the assistant picker: the person answered every remaining
+    // question, chose a target, pressed Enter and read "Cancelled — nothing was touched", which
+    // looks exactly like the target being refused. Re-ask cheaply instead of deferring the failure.
+    raw.goal ||= await askRequired(
+      'What do you want this project to achieve? > ',
+      '  A goal is required — say in one sentence what this project should achieve.',
+    );
     if ((raw.projectKind === 'software' || raw.projectKind === 'mixed') && !raw.softwareScope) {
       raw.softwareScope = await select('How much software work is expected now?', [
         { key: 'small', label: 'Small — one focused tool or a few simple changes' },
         { key: 'growing', label: 'Growing — several related features or integrations' },
         { key: 'complex', label: 'Complex — multiple systems, teams or critical behavior' },
       ]);
+      if (!raw.softwareScope) return cancel();
     }
     if ((raw.projectKind === 'software' || raw.projectKind === 'mixed') && !raw.workflow) {
       const branchesFirst = raw.softwareScope === 'complex';
@@ -254,10 +268,15 @@ async function runOnboarding(targets) {
         { key: 'branches', label: 'Branches + pull request — long-lived, complex code' },
       ];
       raw.workflow = await select('How should code changes land?', branchesFirst ? options.reverse() : options);
+      if (!raw.workflow) return cancel();
     }
     if (!raw.targets?.length) raw.targets = await selectAgents();
-    if (!raw.technicalLevel || !raw.projectKind || !raw.goal || !raw.targets?.length) {
-      say('Cancelled — nothing was touched.');
+    if (!raw.targets?.length) return cancel();
+    // Every field above was already checked when it was asked. This is the last line of defence for
+    // a future question that forgets to: name what is missing instead of a bare "Cancelled".
+    const missing = missingOnboardingFields(raw);
+    if (missing.length) {
+      say(`Cancelled — nothing was touched. Missing: ${missing.join(', ')}.`);
       return;
     }
   }

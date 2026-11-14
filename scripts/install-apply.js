@@ -27,7 +27,7 @@ import { wireUpdate, unwireUpdate, updateManagedPaths, updateArtifactsPresent } 
 import { wireKnowledge, unwireKnowledge, knowledgeManagedPaths, knowledgeArtifactsPresent } from '../targets/knowledge-wiring.js';
 import { wireGitPermissions, unwireGitPermissions, gitPermissionsPath } from '../targets/git-permissions.js';
 import { wireDeepseekBridge } from '../targets/deepseek-bridge.js';
-import { wireOmpBridge, unwireOmpBridge, ompBridgeManagedPaths, ompBridgeArtifactsPresent } from '../targets/omp-bridge.js';
+import { wireOmpBridge, unwireOmpBridge, wireOmpUserLoader, wireOmpPlugin, ompUserLoaderPath, ompPluginDir, ompBridgeManagedPaths, ompBridgeArtifactsPresent } from '../targets/omp-bridge.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CLI_VERSION = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version;
@@ -375,8 +375,15 @@ export async function applyInstall({ skillIds = [], agentIds = [], target, home,
   if (target === 'deepseek') state.deepseekBridge = wireDeepseekBridge();
   // OMP discovers `.omp/hooks/pre/*.js` but has no settings file, so rsc ships a thin loader that
   // imports the real bridge from `.rsc/`. A sync without an explicit policy keeps the last accepted
-  // one, exactly as the guards it selects do.
-  if (target === 'omp') state.ompBridge = wireOmpBridge(cwd, policy || state.policy || {});
+  // one, exactly as the guards it selects do. The machine-level resolver covers OMP sessions started
+  // in a subdirectory, where OMP does not discover the project loader at all.
+  if (target === 'omp') {
+    state.ompBridge = {
+      ...wireOmpBridge(cwd, policy || state.policy || {}),
+      userLoader: wireOmpUserLoader(),
+      plugin: wireOmpPlugin(undefined, CLI_VERSION),
+    };
+  }
   if (gitPermissions === true) state.gitPermissions = wireGitPermissions(target, cwd);
   else if (gitPermissions === false) { unwireGitPermissions(target, cwd); state.gitPermissions = { mode: 'off' }; }
   const context7OptOut = join(cwd, '.rsc', '.no-context7');
@@ -976,6 +983,17 @@ export async function purgeReport({ home, cwd = process.cwd(), withDocs = false,
 
   // The committed declaration of the harness that no longer exists.
   drop(join(cwd, '.rsc.json'));
+
+  // The machine-level OMP resolver is shared by every project on this machine and is inert without
+  // a project loader, so purge names it instead of deleting it behind another project's back.
+  const ompResolver = ompUserLoaderPath();
+  if (existsSync(ompResolver)) {
+    kept.push({ path: ompResolver, reason: 'machine-level OMP resolver shared by every project; it does nothing without a project loader. Delete it to turn it off.' });
+  }
+  const ompPlugin = ompPluginDir();
+  if (existsSync(ompPlugin)) {
+    kept.push({ path: ompPlugin, reason: 'machine-level OMP plugin shared by every project; it does nothing without a project loader. Remove it with `omp plugin uninstall rsc-harness`.' });
+  }
 
   // The `01-TOOLS/` scaffolding onboarding wrote, only where nobody has touched it.
   const skeleton = removeUnmodifiedSkeleton(cwd, { dryRun });

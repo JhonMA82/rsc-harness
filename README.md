@@ -383,7 +383,12 @@ The wizard asks which ones; `--target a,b` does it non-interactively.
 
 > **Oh My Pi** (`omp`) discovers project hooks under `.omp/hooks/pre/`. rsc commits one thin loader
 > there that imports the machine-local bridge from `.rsc/`; in a fresh clone without the harness the
-> loader stays silent until `rsc sync` rebuilds it.
+> loader stays silent until `rsc sync` rebuilds it. OMP only scans that directory from the **current
+> working directory**, so rsc also installs a machine-level resolver at
+> `~/.omp/agent/hooks/pre/rsc.js` (or `$PI_CODING_AGENT_DIR/hooks/pre/rsc.js`) that finds the nearest
+> project and loads its bridge when OMP is started in a subdirectory. It does nothing in a project
+> that has not committed rsc's own loader; delete that file to turn it off. The same resolver travels
+> as the `rsc-harness` OMP plugin, so `omp plugin list` shows the integration as installed.
 
 | Targets | Stack agents | Native commands | Session memory |
 | --- | --- | --- | --- |

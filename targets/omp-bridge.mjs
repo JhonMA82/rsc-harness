@@ -112,7 +112,16 @@ const customMessage = (chunks) => ({
   display: false,
 });
 
+const loadedApis = new WeakSet();
+
 export default async function rscOmp(pi) {
+  // The project loader and the machine-level resolver can reach the same OMP process (a future OMP
+  // that walks up for hooks, or an explicit --hook). Registering every event twice would double the
+  // context and run every guard twice, so the API object is the identity of one registration.
+  if (pi && typeof pi === 'object') {
+    if (loadedApis.has(pi)) return;
+    loadedApis.add(pi);
+  }
   const mods = await loadAll();
   const state = {
     resume: '',

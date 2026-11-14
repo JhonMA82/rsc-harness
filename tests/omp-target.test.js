@@ -5,14 +5,24 @@
 // `.rsc/`. These tests exercise that whole contract without installing OMP itself.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir, homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { applyInstall, removeTargetInstall } from '../scripts/install-apply.js';
 import { doctor } from '../scripts/doctor.js';
 import { detectTarget, targetPaths, TARGET_IDS } from '../targets/index.js';
-import { OMP_LOADER, inspectOmpBridge, ompBridgeManagedPaths } from '../targets/omp-bridge.js';
+import {
+  OMP_LOADER, OMP_USER_LOADER_MARKER, OMP_PLUGIN_NAME, inspectOmpBridge, inspectOmpPlugin,
+  ompAgentDir, ompBridgeManagedPaths, ompPluginDir, ompUserLoaderPath, wireOmpPlugin, wireOmpUserLoader,
+} from '../targets/omp-bridge.js';
+
+// Every install in this file writes the machine-level resolver too. Keep it in a temp agent dir so a
+// test run never touches the developer's ~/.omp. The plugin registration is exercised with a fake
+// `omp` in omp08; never let it reach the real registry from the other tests.
+process.env.PI_CODING_AGENT_DIR = mkdtempSync(join(tmpdir(), 'rsc-omp-agent-'));
+process.env.RSC_NO_OMP_PLUGIN = '1';
 
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
 
@@ -201,5 +211,82 @@ test('omp05 · the bridge paths are the loader plus exactly the modules the acce
     assert.ok(!codeOnly.includes(join(cwd, '.rsc', 'danger-guard.mjs')));
   } finally {
     rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('omp06 · a hand-written machine-level resolver is never replaced', () => {
+  assert.equal(ompAgentDir({ PI_PROFILE: 'work' }), join(homedir(), '.omp', 'profiles', 'work', 'agent'));
+  assert.equal(ompAgentDir({ PI_PROFILE: '../../escape' }), join(homedir(), '.omp', 'agent'), 'a path-shaped profile falls back');
+  const env = { PI_CODING_AGENT_DIR: mkdtempSync(join(tmpdir(), 'rsc-omp-agent-own-')) };
+  const path = ompUserLoaderPath(env);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, '// mine\n');
+  try {
+    assert.deepEqual(wireOmpUserLoader(env), { mode: 'manual', reason: 'loader-collision', path });
+    assert.equal(readFileSync(path, 'utf8'), '// mine\n');
+  } finally {
+    rmSync(env.PI_CODING_AGENT_DIR, { recursive: true, force: true });
+  }
+});
+
+test('omp07 · the machine-level resolver loads the bridge from a subdirectory, and not twice at the root', async () => {
+  const cwd = project();
+  try {
+    await applyInstall({ skillIds: ['suggest'], target: 'omp', cwd });
+    const userLoader = ompUserLoaderPath();
+    assert.ok(existsSync(userLoader), 'the resolver lands in OMP\'s user hook directory');
+    assert.match(readFileSync(userLoader, 'utf8'), new RegExp(OMP_USER_LOADER_MARKER));
+
+    const { default: resolver } = await import(pathToFileURL(userLoader).href);
+    const handlersAt = async (dir) => {
+      const saved = process.cwd();
+      const handlers = new Map();
+      process.chdir(dir);
+      try { await resolver({ on: (name, fn) => handlers.set(name, fn) }); } finally { process.chdir(saved); }
+      return handlers;
+    };
+    const sub = join(cwd, 'packages', 'api');
+    mkdirSync(sub, { recursive: true });
+    assert.ok((await handlersAt(sub)).has('session_start'), 'OMP started in a subdirectory still gets the adapter');
+    assert.equal((await handlersAt(cwd)).size, 0, 'OMP at the project root discovers the committed loader itself');
+    const report = doctor({ target: 'omp', cwd });
+    assert.equal(report.ompUserLoader.mode, 'wired', 'doctor names the machine-level resolver');
+    assert.notEqual(report.ompPlugin.mode, 'absent', 'doctor names the OMP plugin package');
+    assert.ok(existsSync(join(ompPluginDir(), 'package.json')));
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('omp08 · the plugin package is registered through OMP and appears as installed', { skip: process.platform === 'win32' }, () => {
+  const home = mkdtempSync(join(tmpdir(), 'rsc-omp-home-'));
+  const bin = join(home, 'bin');
+  mkdirSync(bin, { recursive: true });
+  const fake = join(bin, 'omp');
+  writeFileSync(fake, `#!/bin/sh
+set -eu
+[ "$1" = plugin ] && [ "$2" = install ]
+mkdir -p "$HOME/.omp/plugins/node_modules"
+ln -sfn "$3" "$HOME/.omp/plugins/node_modules/${OMP_PLUGIN_NAME}"
+printf '{"plugins":{"${OMP_PLUGIN_NAME}":{"version":"0.0.0","enabled":true}},"settings":{}}\\n' > "$HOME/.omp/plugins/omp-plugins.lock.json"
+`);
+  chmodSync(fake, 0o755);
+  const env = {
+    HOME: home,
+    PATH: `${bin}:${process.env.PATH}`,
+    PI_CODING_AGENT_DIR: join(home, 'agent'),
+    RSC_NO_OMP_PLUGIN: '',
+  };
+  try {
+    const written = wireOmpPlugin(env, '9.9.9');
+    assert.equal(written.mode, 'wired');
+    assert.equal(written.registered, true);
+    const dir = ompPluginDir(env);
+    assert.equal(JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).name, OMP_PLUGIN_NAME);
+    assert.equal(JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).omp.extensions[0], './index.js');
+    assert.ok(existsSync(join(home, '.omp', 'plugins', 'node_modules', OMP_PLUGIN_NAME)), 'OMP owns the link');
+    assert.equal(inspectOmpPlugin(env).mode, 'wired');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
   }
 });

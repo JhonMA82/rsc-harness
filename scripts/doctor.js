@@ -15,7 +15,7 @@ import { countGaps, listSkills, listAgents } from './lib/capabilities.js';
 import { resolveCommands, commandPath, targetHasCommands } from '../targets/commands.js';
 import { parseJsonc } from '../targets/git-permissions.js';
 import { inspectMemoryWiring } from '../targets/memory.js';
-import { inspectOmpBridge } from '../targets/omp-bridge.js';
+import { inspectOmpBridge, inspectOmpUserLoader, inspectOmpPlugin } from '../targets/omp-bridge.js';
 import { metricsSummary } from '../targets/session-memory-core.mjs';
 import { agentPath, targetHasAgents, effectiveAgentModel } from '../targets/agents.js';
 import { projectOptOuts } from '../targets/opt-outs.js';
@@ -274,6 +274,10 @@ export function doctor({ target, home, cwd }) {
   // OMP has no settings file to inspect: its hook is a loader under `.omp/` that imports the real
   // bridge from `.rsc/`. Missing either half is a session where memory and guards simply do nothing.
   const ompBridge = target === 'omp' ? inspectOmpBridge(root, state.policy || {}) : null;
+  // Not part of health: the project loader covers OMP started at the root. It only says whether
+  // sessions started in a subdirectory will find the same bridge.
+  const ompUserLoader = target === 'omp' ? inspectOmpUserLoader() : null;
+  const ompPlugin = target === 'omp' ? inspectOmpPlugin() : null;
   const report = {
     target,
     installed: Object.keys(state.skills),
@@ -289,6 +293,8 @@ export function doctor({ target, home, cwd }) {
     },
     contextBudget: contextBudget({ target, home, cwd }),
     ompBridge,
+    ompUserLoader,
+    ompPlugin,
     // The worktree cleanup's trigger is a git hook, and `.git/hooks/` is not cloned. So a repo can
     // carry a perfectly healthy harness and still never clean up, on every machine but the one that
     // ran the installer. Reported, never nagged about: `repair` is what puts it back (P6).

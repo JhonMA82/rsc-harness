@@ -95,13 +95,40 @@ function launchUpdate(root, version, env) {
     : null;
   const [command, argv] = npxCli ? [process.execPath, [npxCli, ...args]] : [base[0], args];
   const viaShell = !npxCli && process.platform === 'win32';
-  const child = spawn(command, argv, {
+  // A release can be newer and still not know a target this project declares — the published line
+  // and a fork diverge, and `sync --target omp` then dies with "unknown target". The detached child
+  // asks the candidate for a dry run first, so an update that cannot sync this project is skipped
+  // instead of overwriting the working harness with one that cannot maintain it.
+  const runner = [
+    "const { spawnSync } = require('node:child_process');",
+    'const command = process.env.RSC_UPDATE_COMMAND;',
+    'const args = JSON.parse(process.env.RSC_UPDATE_ARGS);',
+    "const shell = process.env.RSC_UPDATE_SHELL === '1';",
+    "const run = (a) => spawnSync(command, a, { stdio: 'inherit', shell, windowsHide: true });",
+    "if (process.env.RSC_UPDATE_PREFLIGHT === '1') {",
+    "  const dry = run([...args, '--dry-run']);",
+    "  if (dry.status !== 0) {",
+    "    console.error('rsc: update skipped — this release cannot sync the declared targets; the installed harness was kept.');",
+    '    process.exit(0);',
+    '  }',
+    '}',
+    'const real = run(args);',
+    'process.exit(real.status || 0);',
+  ].join('\n');
+  const child = spawn(process.execPath, ['-e', runner], {
     cwd: root,
     detached: true,
     stdio: ['ignore', log, log],
     windowsHide: true,
-    shell: viaShell, // fallback only (see above); every argument was validated above
-    env: { ...env, RSC_NO_UPDATE_CHECK: '1', RSC_AUTO_UPDATE_TO: version },
+    env: {
+      ...env,
+      RSC_NO_UPDATE_CHECK: '1',
+      RSC_AUTO_UPDATE_TO: version,
+      RSC_UPDATE_COMMAND: command,
+      RSC_UPDATE_ARGS: JSON.stringify(argv),
+      RSC_UPDATE_SHELL: viaShell ? '1' : '0',
+      RSC_UPDATE_PREFLIGHT: '1',
+    },
   });
   child.on('error', () => {});
   child.unref();

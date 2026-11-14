@@ -25,7 +25,9 @@ function project(installed, { optOut = false, targets = ['claude', 'codex'] } = 
   const fake = join(root, 'fake-npx.mjs');
   writeFileSync(fake, `
 import { writeFileSync } from 'node:fs';
-writeFileSync(${JSON.stringify(join(root, 'called.json'))}, JSON.stringify({ args: process.argv.slice(2), to: process.env.RSC_AUTO_UPDATE_TO }));
+const args = process.argv.slice(2);
+if (args.includes('--dry-run')) process.exit(process.env.FAKE_REJECT_DRY ? 1 : 0);
+writeFileSync(${JSON.stringify(join(root, 'called.json'))}, JSON.stringify({ args, to: process.env.RSC_AUTO_UPDATE_TO }));
 if (!process.env.FAKE_FAIL) writeFileSync(${JSON.stringify(join(root, '.rsc', '.version'))}, process.env.RSC_AUTO_UPDATE_TO + '\\n');
 `);
   return { root, fake };
@@ -52,6 +54,14 @@ function waitFor(path, ms = 5000) {
   const end = Date.now() + ms;
   while (Date.now() < end) {
     if (existsSync(path)) return true;
+    spawnSync(process.execPath, ['-e', 'setTimeout(()=>{},50)']);
+  }
+  return false;
+}
+function waitForText(path, re, ms = 5000) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    try { if (re.test(readFileSync(path, 'utf8'))) return true; } catch { /* not there yet */ }
     spawnSync(process.execPath, ['-e', 'setTimeout(()=>{},50)']);
   }
   return false;
@@ -138,6 +148,14 @@ test('a newer release than the failed one is tried at once', () => {
   writeState(p.root, { from: '2.1.0', to: '2.2.0', startedAt: hoursAgo(2) });
   assert.match(sessionStart(p, '2.2.1'), /rsc updating/);
   assert.ok(waitFor(join(p.root, 'called.json')));
+});
+
+test('a release that cannot sync the declared targets is skipped, keeping the harness', () => {
+  const p = project('2.1.0');
+  sessionStart(p, '2.2.0', { FAKE_REJECT_DRY: '1' });
+  assert.ok(waitForText(join(p.root, '.rsc', 'auto-update.log'), /cannot sync the declared targets/), 'the reason is in the log');
+  assert.equal(existsSync(join(p.root, 'called.json')), false, 'the real sync never ran');
+  assert.equal(readFileSync(join(p.root, '.rsc', '.version'), 'utf8').trim(), '2.1.0', 'the working version is untouched');
 });
 
 test('a version from the registry that is not a plain version launches nothing', () => {

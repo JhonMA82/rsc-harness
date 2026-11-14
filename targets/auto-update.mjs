@@ -78,6 +78,11 @@ function declaredTargets(root) {
     return Array.isArray(list) ? list.filter((t) => typeof t === 'string' && /^[a-z0-9-]+$/.test(t)) : [];
   } catch { return []; }
 }
+const sameTargets = (a, b) => {
+  const left = Array.isArray(a) ? [...a].sort() : [];
+  const right = Array.isArray(b) ? [...b].sort() : [];
+  return left.length === right.length && left.every((value, i) => value === right[i]);
+};
 function launchUpdate(root, version, env) {
   // RSC_AUTO_UPDATE_CMD (a JSON argv) replaces npx in tests; the arguments after it are the real ones.
   const base = env.RSC_AUTO_UPDATE_CMD
@@ -101,18 +106,41 @@ function launchUpdate(root, version, env) {
   // instead of overwriting the working harness with one that cannot maintain it.
   const runner = [
     "const { spawnSync } = require('node:child_process');",
+    "const { readFileSync, writeFileSync } = require('node:fs');",
     'const command = process.env.RSC_UPDATE_COMMAND;',
     'const args = JSON.parse(process.env.RSC_UPDATE_ARGS);',
     "const shell = process.env.RSC_UPDATE_SHELL === '1';",
-    "const run = (a) => spawnSync(command, a, { stdio: 'inherit', shell, windowsHide: true });",
+    'const run = (a, capture) => spawnSync(command, a, capture',
+    "  ? { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], shell, windowsHide: true }",
+    "  : { stdio: 'inherit', shell, windowsHide: true });",
     "if (process.env.RSC_UPDATE_PREFLIGHT === '1') {",
-    "  const dry = run([...args, '--dry-run']);",
-    "  if (dry.status !== 0) {",
-    "    console.error('rsc: update skipped — this release cannot sync the declared targets; the installed harness was kept.');",
+    "  const dry = run([...args, '--dry-run'], true);",
+    '  if (dry.stdout) process.stdout.write(dry.stdout);',
+    '  if (dry.stderr) process.stderr.write(dry.stderr);',
+    '  if (dry.status !== 0) {',
+    "    const said = `${dry.stdout || ''}${dry.stderr || ''}`.trim().replace(/\\s+/g, ' ');",
+    '    // A published line that does not know a target this project declares is not a transient',
+    '    // failure: retrying tomorrow would fail exactly the same way. Record the block so the next',
+    "    // session explains it once and stops launching npx. Other failures keep the daily retry.",
+    "    const blocked = /unknown target/i.test(said);",
+    "    if (blocked && process.env.RSC_UPDATE_STATE) {",
+    '      try {',
+    "        const state = JSON.parse(readFileSync(process.env.RSC_UPDATE_STATE, 'utf8'));",
+    '        state.blocked = true;',
+    '        state.blockedAt = new Date().toISOString();',
+    "        state.blockedTargets = JSON.parse(process.env.RSC_UPDATE_TARGETS || '[]');",
+    "        state.blockedReason = 'unknown-target';",
+    '        state.blockedMessage = said.slice(0, 200);',
+    "        writeFileSync(process.env.RSC_UPDATE_STATE, `${JSON.stringify(state, null, 2)}\\n`);",
+    '      } catch {}',
+    '    }',
+    "    console.error(blocked",
+    "      ? 'rsc: update blocked — this release cannot sync the declared targets; the installed harness was kept.'",
+    "      : 'rsc: update skipped — the candidate release failed its sync preflight; the installed harness was kept.');",
     '    process.exit(0);',
     '  }',
     '}',
-    'const real = run(args);',
+    'const real = run(args, false);',
     'process.exit(real.status || 0);',
   ].join('\n');
   const child = spawn(process.execPath, ['-e', runner], {
@@ -128,6 +156,8 @@ function launchUpdate(root, version, env) {
       RSC_UPDATE_ARGS: JSON.stringify(argv),
       RSC_UPDATE_SHELL: viaShell ? '1' : '0',
       RSC_UPDATE_PREFLIGHT: '1',
+      RSC_UPDATE_STATE: stateFile(root),
+      RSC_UPDATE_TARGETS: JSON.stringify(targets),
     },
   });
   child.on('error', () => {});
@@ -141,6 +171,7 @@ export async function updateNotice(root, env = process.env) {
     const installed = readFileSync(join(root, '.rsc', '.version'), 'utf8').trim();
     // A background update that finished since the last session: say so once, then keep quiet.
     const prior = readAutoState(root);
+    const targets = declaredTargets(root);
     if (prior && !prior.reported && SEMVER_ONLY.test(String(prior.to)) && !isNewer(prior.to, installed)) {
       say(`
 ===== rsc updated =====
@@ -165,10 +196,30 @@ ACTION: tell the user in one line. Files of the harness may show as changed in g
       const newMajor = majorOf(latest) !== majorOf(installed);
       const auto = !existsSync(join(root, '.rsc', '.no-auto-update')) && !newMajor;
       const now = Date.now();
-      const since = prior && prior.to === latest ? now - new Date(prior.startedAt).getTime() : Infinity;
+      // The preflight recorded that this exact release does not know the targets this project
+      // declares. Explain it once and do not launch it again: tomorrow would fail the same way.
+      // A changed target list or a newer release is a new question and is tried at once.
+      const blocked = prior?.blocked === true && prior.to === latest && sameTargets(prior.blockedTargets, targets);
+      if (blocked) {
+        if (!prior.blockedReported) {
+          say(`
+===== rsc update blocked =====
+rsc ${latest} cannot sync this project's declared targets (${targets.length ? targets.join(', ') : 'none'}); keeping ${installed}.
+Nothing was changed. The reason is in .rsc/auto-update.log.
+ACTION: tell the user in one line; do not run the update.
+============================
+`);
+          writeAutoState(root, { ...prior, blockedReported: true });
+        }
+        return out;
+      }
+      const targetsChanged = prior?.blocked === true && prior.to === latest && !sameTargets(prior.blockedTargets, targets);
+      const since = prior && prior.to === latest && !targetsChanged ? now - new Date(prior.startedAt).getTime() : Infinity;
       if (auto && since >= AUTO_RETRY_MS) {
+        // Write the state before the detached child starts: if its preflight finds an unknown
+        // target, it merges the block into this same file.
+        writeAutoState(root, { from: installed, to: latest, startedAt: new Date(now).toISOString(), blockedTargets: targets });
         launchUpdate(root, latest, env);
-        writeAutoState(root, { from: installed, to: latest, startedAt: new Date(now).toISOString() });
         say(`
 ===== rsc updating =====
 rsc ${latest} is out — you have ${installed}. It is installing itself in the background now and

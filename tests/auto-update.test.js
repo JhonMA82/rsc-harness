@@ -26,7 +26,11 @@ function project(installed, { optOut = false, targets = ['claude', 'codex'] } = 
   writeFileSync(fake, `
 import { writeFileSync } from 'node:fs';
 const args = process.argv.slice(2);
-if (args.includes('--dry-run')) process.exit(process.env.FAKE_REJECT_DRY ? 1 : 0);
+if (args.includes('--dry-run')) {
+  if (!process.env.FAKE_REJECT_DRY) process.exit(0);
+  if (process.env.FAKE_REJECT_DRY === 'unknown-target') process.stderr.write('rsc error: unknown target omp\\n');
+  process.exit(1);
+}
 writeFileSync(${JSON.stringify(join(root, 'called.json'))}, JSON.stringify({ args, to: process.env.RSC_AUTO_UPDATE_TO }));
 if (!process.env.FAKE_FAIL) writeFileSync(${JSON.stringify(join(root, '.rsc', '.version'))}, process.env.RSC_AUTO_UPDATE_TO + '\\n');
 `);
@@ -150,12 +154,59 @@ test('a newer release than the failed one is tried at once', () => {
   assert.ok(waitFor(join(p.root, 'called.json')));
 });
 
-test('a release that cannot sync the declared targets is skipped, keeping the harness', () => {
+test('a release that cannot sync the declared targets is blocked, keeping the harness', () => {
   const p = project('2.1.0');
-  sessionStart(p, '2.2.0', { FAKE_REJECT_DRY: '1' });
-  assert.ok(waitForText(join(p.root, '.rsc', 'auto-update.log'), /cannot sync the declared targets/), 'the reason is in the log');
+  sessionStart(p, '2.2.0', { FAKE_REJECT_DRY: 'unknown-target' });
+  assert.ok(waitForText(join(p.root, '.rsc', 'auto-update.log'), /unknown target omp/), 'the candidate error is in the log');
+  assert.ok(waitForText(join(p.root, '.rsc', 'auto-update.log'), /update blocked/), 'the skip is in the log');
+  assert.ok(waitForText(join(p.root, '.rsc', 'auto-update.json'), /"blocked": true/), 'the block is recorded');
   assert.equal(existsSync(join(p.root, 'called.json')), false, 'the real sync never ran');
   assert.equal(readFileSync(join(p.root, '.rsc', '.version'), 'utf8').trim(), '2.1.0', 'the working version is untouched');
+});
+
+test('a blocked release is explained once and not retried', () => {
+  const p = project('2.1.0');
+  sessionStart(p, '2.2.0', { FAKE_REJECT_DRY: 'unknown-target' });
+  assert.ok(waitForText(join(p.root, '.rsc', 'auto-update.json'), /"blocked": true/), 'the background preflight recorded the block');
+  const started = state(p.root).startedAt;
+  const first = sessionStart(p, '2.2.0', { FAKE_REJECT_DRY: 'unknown-target' });
+  assert.match(first, /rsc update blocked/);
+  assert.match(first, /cannot sync this project's declared targets \(claude, codex\)/);
+  assert.match(first, /keeping 2\.1\.0/);
+  assert.equal(state(p.root).startedAt, started, 'the notice did not launch another attempt');
+  const second = sessionStart(p, '2.2.0', { FAKE_REJECT_DRY: 'unknown-target' });
+  assert.doesNotMatch(second, /rsc update blocked|rsc updating|update available/);
+  assert.equal(state(p.root).startedAt, started);
+  assert.equal(existsSync(join(p.root, 'called.json')), false);
+});
+
+test('a blocked release is tried again when the declared targets change', () => {
+  const p = project('2.1.0');
+  sessionStart(p, '2.2.0', { FAKE_REJECT_DRY: 'unknown-target' });
+  assert.ok(waitForText(join(p.root, '.rsc', 'auto-update.json'), /"blocked": true/));
+  writeFileSync(join(p.root, '.rsc.json'), JSON.stringify({ version: 1, targets: ['claude'], skills: [] }));
+  assert.match(sessionStart(p, '2.2.0'), /rsc updating/);
+  assert.ok(waitFor(join(p.root, 'called.json')));
+  const called = JSON.parse(readFileSync(join(p.root, 'called.json'), 'utf8'));
+  assert.deepEqual(called.args, ['sync', '--target', 'claude']);
+});
+
+test('a newer release than the blocked one is tried at once', () => {
+  const p = project('2.1.0');
+  writeState(p.root, {
+    from: '2.1.0', to: '2.2.0', startedAt: hoursAgo(2),
+    blocked: true, blockedAt: hoursAgo(2), blockedTargets: ['claude', 'codex'], blockedReported: true,
+  });
+  assert.match(sessionStart(p, '2.2.1'), /rsc updating/);
+  assert.ok(waitFor(join(p.root, 'called.json')));
+});
+
+test('a preflight failure that is not about targets keeps the daily retry', () => {
+  const p = project('2.1.0');
+  sessionStart(p, '2.2.0', { FAKE_REJECT_DRY: 'network' });
+  assert.ok(waitForText(join(p.root, '.rsc', 'auto-update.log'), /failed its sync preflight/));
+  assert.equal(state(p.root).blocked, undefined, 'a transient failure is not a block');
+  assert.equal(readFileSync(join(p.root, '.rsc', '.version'), 'utf8').trim(), '2.1.0');
 });
 
 test('a version from the registry that is not a plain version launches nothing', () => {

@@ -471,9 +471,11 @@ anything, keeps a recoverable copy, and never touches skills or agents you wrote
 ### Update
 
 **rsc updates itself.** At session start it checks npm. A release in the same major installs in the
-background and takes effect next session; a new major asks first. To turn it off, create
-`.rsc/.no-auto-update`. By hand: `npm install -g @ericrisco/rsc@latest && rsc sync`. Every sync
-snapshots the project first, so `rsc restore latest` undoes a bad update.
+background and takes effect next session; a new major asks first. A release that cannot sync the
+project's declared targets is blocked and explained once, and is tried again only when the targets
+or the release change. To turn auto-update off, create `.rsc/.no-auto-update`. By hand:
+`npm install -g @ericrisco/rsc@latest && rsc sync`. Every sync snapshots the project first, so
+`rsc restore latest` undoes a bad update.
 
 ---
 

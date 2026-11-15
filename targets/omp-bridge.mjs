@@ -11,7 +11,7 @@
 // knowledge and the copy guard: a subagent's turn is not a person's turn.
 import { existsSync } from 'node:fs';
 import { execFile } from 'node:child_process';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 // The native layer is optional like every sibling above: a `.rsc/` from before this module, or an
 // interrupted copy, must cost the native settings, never the guards, memory or lane gate.
@@ -63,6 +63,14 @@ const ROOT = resolve(HERE, '..');
 // A guard is a local Node script; five seconds is generous in normal use. Tests run many of them
 // under a loaded two-core box, so the ceiling is configurable for that case only.
 const GUARD_TIMEOUT = Number(process.env.RSC_OMP_GUARD_TIMEOUT) || 5000;
+
+// A guard is plain Node, and the host is not always Node: OMP ships as a Bun-compiled `omp` binary,
+// so its `process.execPath` starts a nested session instead of running the script — every critical
+// guard then times out into a deny. Same rule as knowledge-sync's workerRuntime: only a real Node
+// executable may run a guard, and a Bun host always falls back to the `node` on PATH.
+export function guardRuntime(execPath = process.execPath, versions = process.versions) {
+  return !versions.bun && /^node(?:\.exe)?$/i.test(basename(execPath)) ? execPath : 'node';
+}
 
 // rsc-omp-todo:managed
 //
@@ -118,7 +126,7 @@ function runGuard(script, root, payload, cwd, critical = false) {
     if (!existsSync(script)) { done(null); return; }
     let child;
     try {
-      child = execFile(process.execPath, [script, root], {
+      child = execFile(guardRuntime(), [script, root], {
         cwd: cwd || root,
         timeout: GUARD_TIMEOUT,
         windowsHide: true,

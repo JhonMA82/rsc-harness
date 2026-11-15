@@ -17,7 +17,7 @@ import {
   OMP_LOADER, OMP_USER_LOADER_MARKER, OMP_PLUGIN_NAME, OMP_TODO_MARKER, inspectOmpBridge, inspectOmpPlugin,
   inspectOmpTodo, ompAgentDir, ompBridgeManagedPaths, ompPluginDir, ompUserLoaderPath, wireOmpPlugin, wireOmpUserLoader,
 } from '../targets/omp-bridge.js';
-import { applyOmpTodoDefault, pinOmpTodoDefault } from '../targets/omp-bridge.mjs';
+import { applyOmpTodoDefault, guardRuntime, pinOmpTodoDefault } from '../targets/omp-bridge.mjs';
 import {
   inspectOmpRules, ompRulesPath, unwireOmpRules, wireOmpRules,
 } from '../targets/omp-rules.js';
@@ -398,5 +398,46 @@ printf '{"plugins":{"${OMP_PLUGIN_NAME}":{"version":"0.0.0","enabled":true}},"se
     assert.equal(inspectOmpPlugin(env).mode, 'wired');
   } finally {
     rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('omp12 · guards run under Node when the OMP host binary is not Node', async () => {
+  const cwd = project();
+  const node = process.execPath;
+  const bun = Object.getOwnPropertyDescriptor(process.versions, 'bun');
+  try {
+    await applyInstall({ skillIds: ['suggest'], target: 'omp', cwd });
+    // OMP ships as a Bun-compiled `omp` binary: inside its extension host `process.execPath` is that
+    // binary, and `omp <script>` starts a nested session instead of the guard. The guard then dies
+    // by timeout and every critical guard denies the command. A guard is plain Node, so the host
+    // may supply the path only when the host itself is Node.
+    assert.equal(guardRuntime('/opt/omp/bin/omp', { bun: '1.2.0' }), 'node');
+    assert.equal(guardRuntime('/opt/omp/bin/omp', {}), 'node');
+    assert.equal(guardRuntime(node, { bun: '1.2.0' }), 'node', 'a Bun host never trusts its execPath');
+    assert.equal(guardRuntime(node, {}), node);
+
+    const { default: factory } = await import(pathToFileURL(join(cwd, '.rsc', 'omp-bridge.mjs')).href);
+    const handlers = new Map();
+    await factory({ on(name, fn) { handlers.set(name, fn); } });
+    const ctx = {
+      cwd,
+      mode: 'tui',
+      agent: { kind: 'main' },
+      hasUI: false,
+      sessionManager: { getSessionId: () => 'omp-main', getSessionFile: () => null },
+    };
+    // The host reports a binary that cannot run a script, exactly like the real `omp` binary. Before
+    // the fix every command was denied here, benign ones included.
+    Object.defineProperty(process, 'execPath', { value: join(tmpdir(), 'rsc-omp-guard-no-node'), configurable: true });
+    process.versions.bun = '1.2.0';
+    assert.equal(await handlers.get('tool_call')({ toolName: 'bash', input: { command: 'echo hola' } }, ctx), undefined,
+      'a benign command stays allowed');
+    const blocked = await handlers.get('tool_call')({ toolName: 'bash', input: { command: 'rm -rf /' } }, ctx);
+    assert.equal(blocked?.block, true, 'the guard really ran and still blocks a destructive command');
+    assert.match(blocked.reason, /rm with -r and -f/);
+  } finally {
+    Object.defineProperty(process, 'execPath', { value: node, configurable: true });
+    if (bun) Object.defineProperty(process.versions, 'bun', bun); else delete process.versions.bun;
+    rmSync(cwd, { recursive: true, force: true });
   }
 });

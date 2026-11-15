@@ -16,7 +16,18 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
-const GUARD_TIMEOUT = 5000;
+// A guard is a local Node script; five seconds is generous in normal use. Tests run many of them
+// under a loaded two-core box, so the ceiling is configurable for that case only.
+const GUARD_TIMEOUT = Number(process.env.RSC_OMP_GUARD_TIMEOUT) || 5000;
+
+// rsc-omp-todo:managed
+//
+// OMP's live todo panel is fed by the model calling its native `todo` tool; an extension cannot
+// write that state through a supported API. What an extension can do is make the first list the
+// default: when `todo.eager` is not configured by the person, pin it to `always`. OMP then forces
+// (or, on providers without forced tool choice, strongly reminds) one `todo init` before work.
+const TODO_EAGER_SETTING = 'todo.eager';
+const TODO_OPT_OUT = 'RSC_NO_OMP_TODO';
 
 const optional = async (name) => {
   try { return await import(new URL(name, import.meta.url)); } catch { return null; }
@@ -112,6 +123,66 @@ const customMessage = (chunks) => ({
   display: false,
 });
 
+// Loaded lazily: older OMP builds do not expose the typed settings registry, and a missing package
+// must cost one caught import, never a session. Cached either way.
+let settingsRegistry;
+let settingsRegistryTried = false;
+async function loadSettingsRegistry() {
+  if (settingsRegistryTried) return settingsRegistry;
+  settingsRegistryTried = true;
+  try { settingsRegistry = await import('@oh-my-pi/pi-coding-agent/config/registry'); }
+  catch { settingsRegistry = null; }
+  return settingsRegistry;
+}
+
+/**
+ * Pure decision half, exported for tests: pin `todo.eager` to `always` only when the person has not
+ * configured it. A project/global/env value always wins, so this is a default, not a policy.
+ */
+export function pinOmpTodoDefault(pi, lookup) {
+  try {
+    if (!pi?.pi?.settings || typeof lookup !== 'function') return false;
+    const eager = lookup(TODO_EAGER_SETTING);
+    // Older OMP builds without the typed registry (or without both methods) are left alone:
+    // this is a convenience default, not a reason to guess at a setting we cannot read.
+    if (!eager || typeof eager.isConfigured !== 'function' || typeof eager.override !== 'function') return false;
+    if (eager.isConfigured(pi.pi.settings)) return false;
+    eager.override(pi.pi.settings, 'always');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The runtime half: honor both opt-outs, then pin the default through OMP's own registry. */
+export async function applyOmpTodoDefault(pi) {
+  try {
+    if (process.env[TODO_OPT_OUT] === '1') return false;
+    if (existsSync(join(ROOT, '.rsc', '.no-omp-todo'))) return false;
+    const registry = await loadSettingsRegistry();
+    return pinOmpTodoDefault(pi, registry?.lookup);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * OMP's native answer surface is `ask`, not a prose menu. The skills close with a compass whose
+ * ➡️ line already carries 1–3 options; this per-turn line is what turns that menu into the native
+ * form. It is intentionally limited to the interactive main session: subagents cannot prompt, and
+ * print/RPC sessions throw on `ask`.
+ */
+export function askReminder(pi, ctx) {
+  try {
+    if (ctx?.mode !== 'tui' || !ctx?.hasUI) return '';
+    const tools = pi?.getActiveTools?.();
+    if (!Array.isArray(tools) || !tools.includes('ask')) return '';
+    return '- Native question form: when the compass\'s ➡️ line offers 1–3 real options — and the lane is not autopilot — call the `ask` tool with a short HTML form and the recommended option preselected; keep the compass lines. Use prose only when `ask` is unavailable or the question is open-ended.';
+  } catch {
+    return '';
+  }
+}
+
 const loadedApis = new WeakSet();
 
 export default async function rscOmp(pi) {
@@ -123,6 +194,7 @@ export default async function rscOmp(pi) {
     loadedApis.add(pi);
   }
   const mods = await loadAll();
+  await applyOmpTodoDefault(pi);
   const state = {
     resume: '',
     update: null,
@@ -171,6 +243,8 @@ export default async function rscOmp(pi) {
   const begin = async (ctx) => {
     try {
       if (!isMain(ctx)) return;
+      // A settings reload can drop a runtime override; re-pin before the first prompt of a session.
+      await applyOmpTodoDefault(pi);
       state.resume = '';
       state.firstPrompt = true;
       state.stopRan = false;
@@ -222,6 +296,9 @@ export default async function rscOmp(pi) {
         const said = mods.knowledge?.onRequest?.(project);
         if (said) chunks.push(`Cuéntale esto al usuario en una línea:\n${said}`);
       } catch { /* knowledge sync is optional and fail-open */ }
+
+      const ask = askReminder(pi, ctx);
+      if (ask) chunks.push(ask);
 
       // The lane gate goes last: it must be the most recent instruction on the turn, exactly as
       // Claude's UserPromptSubmit order makes it. Its modules are absent when the plan has no lane.

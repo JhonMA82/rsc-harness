@@ -579,6 +579,8 @@ test('codex: appends always-on block to AGENTS.md and links the base', async () 
   await applyInstall({ skillIds: ['suggest', 'go'], target: 'codex', cwd });
   const agents = readFileSync(join(cwd, 'AGENTS.md'), 'utf8');
   assert.ok(agents.includes('rsc-suggest:start'));
+  assert.ok(!agents.includes('Native todo panel'), 'the OMP-only todo section does not leak into the shared AGENTS.md family');
+  assert.ok(!agents.includes('Native question form'), 'the OMP-only ask section does not leak either');
   assert.ok(existsSync(join(cwd, '.codex/rsc/go/SKILL.md')));
   assert.ok(existsSync(join(cwd, '.rsc/skills/go/SKILL.md')));
 });

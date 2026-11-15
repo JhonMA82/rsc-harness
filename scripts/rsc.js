@@ -626,6 +626,8 @@ function printDoctorHeadline(report) {
   if (report.opencodeSkillsUnreachable?.length) {
     say(`OpenCode skills not discoverable: ${safeLines(report.opencodeSkillsUnreachable).join(', ')}. Run \`npx @ericrisco/rsc sync\` to move them under .opencode/skills/.`);
   }
+  if (report.ompRules?.action && !report.healthy) say(`OMP rules: ${report.ompRules.action}`);
+  if (report.ompTodo?.action && !report.healthy) say(`OMP todo: ${report.ompTodo.action}`);
 }
 
 // What the harness costs in context before the user types anything. Printed ahead of the raw

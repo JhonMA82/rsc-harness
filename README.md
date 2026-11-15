@@ -368,7 +368,7 @@ The wizard asks which ones; `--target a,b` does it non-interactively.
 | `amp` | `.amp/rsc/<id>/` → symlink | block in `AGENTS.md` |
 | `opencode` | `.opencode/skills/<id>/` → symlink (discovered natively) | block in `AGENTS.md` |
 | `deepseek` | `.dsh/skills/<id>/` → symlink (discovered natively) | block in `AGENTS.md` |
-| `omp` | `.omp/skills/<id>/` → symlink (discovered natively) | block in `.omp/AGENTS.md` |
+| `omp` | `.omp/skills/<id>/` → symlink (discovered natively) | block in `.omp/AGENTS.md` + sticky rules in `.omp/RULES.md` |
 | `jules` | `.jules/rsc/<id>/` → symlink | block in `AGENTS.md` |
 | `junie` | `.junie/rsc/<id>/` → symlink | block in `.junie/guidelines.md` |
 | `kiro` | `.kiro/rsc/<id>/` → symlink | doc in `.kiro/steering/rsc-suggest.md` |
@@ -389,6 +389,17 @@ The wizard asks which ones; `--target a,b` does it non-interactively.
 > project and loads its bridge when OMP is started in a subdirectory. It does nothing in a project
 > that has not committed rsc's own loader; delete that file to turn it off. The same resolver travels
 > as the `rsc-harness` OMP plugin, so `omp plugin list` shows the integration as installed.
+>
+> **Native todo panel.** OMP's TUI has a live todo list, fed only by the model calling its native
+> `todo` tool. rsc writes a short section into `.omp/AGENTS.md` so FTD and ASDD runs mirror their
+> checklist or `## Tasks` table into that tool, and the bridge sets `todo.eager` to `always` when you
+> have not configured it yourself. `.omp/RULES.md` carries the hard rules that must survive
+> compaction and reach task subagents, which OMP deliberately does not give `AGENTS.md`. Opt out
+> with `.rsc/.no-omp-todo` or `RSC_NO_OMP_TODO=1`; the Markdown artifacts remain the durable
+> record. For a clearer live view, `omp config set display.hideToolActivity false` and
+> `omp config set display.pinnedAgents full`. The same adapter tells the main session to turn the
+> compass's `➡️` options into OMP's native `ask` form, with the recommended option preselected.
+> `ask` only exists in interactive sessions; in `-p`/RPC the question stays in prose.
 
 | Targets | Stack agents | Native commands | Session memory |
 | --- | --- | --- | --- |
@@ -406,8 +417,11 @@ The wizard asks which ones; `--target a,b` does it non-interactively.
 `manifest.json` is the generated public inventory: 34 agents (5 base + 29 selective specialists) and
 53 command entries (20 fixed + 33 stack aliases). Unsupported means rsc writes nothing for that
 surface. Generated agents carry no `model:` on OpenCode or Oh My Pi, so they use the session's model;
-pin one for the team with `rsc agent-model <target> <model>`. If you edit a generated agent,
-`rsc sync` keeps your file, and `rsc agents reset <name>` takes rsc's version back after a backup.
+pin one for the team with `rsc agent-model <target> <model>`. On Oh My Pi, generated agents also
+autoload the skill they name (`developer` → `implement`, refuters and verifier → `review`, stack
+agents → their stack skill), so a task subagent gets the discipline before its first prompt. If you
+edit a generated agent, `rsc sync` keeps your file, and `rsc agents reset <name>` takes rsc's version
+back after a backup.
 
 ---
 

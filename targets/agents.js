@@ -98,6 +98,10 @@ const AGENTS = [
   {
     name: 'developer',
     desc: 'Implementation worker: turns an approved spec+plan into working, tested code under strict TDD (red->green->refactor), one task at a time. The rsc SDD fan-out/implementation hand.',
+    // OMP can preload a skill before the subagent's first prompt. The body points at `implement`;
+    // without this the child would have to discover and read it on its own, and OMP never gives a
+    // task subagent the project's AGENTS.md. Other targets ignore the field.
+    autoloadSkills: ['implement'],
     body: `You are the **developer** subagent for this project — the hands of the rsc SDD chain. You execute a planned, approved task into working, tested code. You do NOT design features.
 
 - Work **test-first**: smallest failing test (RED), least code to pass it (GREEN), then refactor on green. A test that never failed proves nothing.
@@ -111,6 +115,7 @@ Full discipline lives in the \`implement\` skill.`,
   {
     name: 'refuter-correctness',
     desc: 'Adversarial reviewer, correctness lens: attacks a green diff for boundary and error-path defects, and demands that any home-grown gate prove it can both fail and pass. Fresh context, mandate to refute.',
+    autoloadSkills: ['review'],
     body: `You are the **correctness** refuter for this project — one of three adversarial lenses ${'`review`'} dispatches at tier 2. What matters is not the number of lenses but their **diversity**: the worst defect this panel ever found was found by the privacy lens, which was not looking for it.
 
 ${REFUTER_CONTRACT}
@@ -125,6 +130,7 @@ ${REFUTER_CONTRACT}
   {
     name: 'refuter-security',
     desc: 'Adversarial reviewer, security and privacy lens: hunts untrusted input reaching a sink, authz gaps, leaked secrets and data escaping where it should not. Fresh context, mandate to refute.',
+    autoloadSkills: ['review'],
     body: `You are the **security and privacy** refuter for this project — one of three adversarial lenses ${'`review`'} dispatches at tier 2. Your value is that you are not looking where the others look: the worst defect this panel ever found was found by this lens, chasing something else entirely.
 
 ${REFUTER_CONTRACT}
@@ -136,6 +142,7 @@ ${REFUTER_CONTRACT}
   {
     name: 'refuter-tests',
     desc: 'Adversarial reviewer, tests-as-evidence lens: tries to make the suite pass wrongly, invents mutants the builder did not choose, and checks the spec-to-test mapping in both directions. Fresh context, mandate to refute.',
+    autoloadSkills: ['review'],
     body: `You are the **tests-as-evidence** refuter for this project — one of three adversarial lenses ${'`review`'} dispatches at tier 2.
 
 ${REFUTER_CONTRACT}
@@ -153,6 +160,7 @@ ${REFUTER_CONTRACT}
   {
     name: 'finding-verifier',
     desc: 'Adversarial verifier of review findings: takes ONE consolidated finding and tries to prove it false against the code. Default stance: the finding is false; only a reproduced or traced failure is CONFIRMED. Fresh context, edits nothing.',
+    autoloadSkills: ['review'],
     body: `You are the **finding verifier** for this project. ${'`review`'} hands you **one** finding that survived ${'`rsc review consolidate`'} — a blocker or should-fix some refuter lens reported against a diff. Your job is to **prove it false**. Your starting position is that it is false; the finding has to beat you.
 
 **Your inputs:** the finding (location, claim, failure scenario, evidence) plus the same four the lenses had —
@@ -265,6 +273,12 @@ function renderMd(spec, model, agent, toolsFormat = spec.toolsFormat) {
     } else {
       fm.push(`tools: [${agent.tools.join(', ')}]`);
     }
+  }
+  // OMP preloads a named skill into the child before its first prompt. Base agents declare it
+  // explicitly; stack reviewers/resolvers already carry the stack skill they belong to.
+  if (toolsFormat === 'omp') {
+    const autoload = agent.autoloadSkills?.length ? agent.autoloadSkills : agent.skills;
+    if (autoload?.length) fm.push(`autoloadSkills: [${autoload.join(', ')}]`);
   }
   fm.push('---', '');
   return `${fm.join('\n')}${agent.body}\n`;

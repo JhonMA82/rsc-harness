@@ -10,19 +10,26 @@ import { tmpdir, homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { applyInstall, removeTargetInstall } from '../scripts/install-apply.js';
+import { applyInstall, removeTargetInstall, managedPathsForInstall } from '../scripts/install-apply.js';
 import { doctor } from '../scripts/doctor.js';
 import { detectTarget, targetPaths, TARGET_IDS } from '../targets/index.js';
 import {
-  OMP_LOADER, OMP_USER_LOADER_MARKER, OMP_PLUGIN_NAME, inspectOmpBridge, inspectOmpPlugin,
-  ompAgentDir, ompBridgeManagedPaths, ompPluginDir, ompUserLoaderPath, wireOmpPlugin, wireOmpUserLoader,
+  OMP_LOADER, OMP_USER_LOADER_MARKER, OMP_PLUGIN_NAME, OMP_TODO_MARKER, inspectOmpBridge, inspectOmpPlugin,
+  inspectOmpTodo, ompAgentDir, ompBridgeManagedPaths, ompPluginDir, ompUserLoaderPath, wireOmpPlugin, wireOmpUserLoader,
 } from '../targets/omp-bridge.js';
+import { applyOmpTodoDefault, pinOmpTodoDefault } from '../targets/omp-bridge.mjs';
+import {
+  inspectOmpRules, ompRulesPath, unwireOmpRules, wireOmpRules,
+} from '../targets/omp-rules.js';
 
 // Every install in this file writes the machine-level resolver too. Keep it in a temp agent dir so a
 // test run never touches the developer's ~/.omp. The plugin registration is exercised with a fake
 // `omp` in omp08; never let it reach the real registry from the other tests.
 process.env.PI_CODING_AGENT_DIR = mkdtempSync(join(tmpdir(), 'rsc-omp-agent-'));
 process.env.RSC_NO_OMP_PLUGIN = '1';
+// A full-suite run on a two-core box can starve the four guard child processes past the production
+// five-second ceiling. The guards are local scripts, so the test gives them room instead of flaking.
+process.env.RSC_OMP_GUARD_TIMEOUT = '15000';
 
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
 
@@ -61,7 +68,15 @@ test('omp02 · install writes the native surfaces, the committed loader and the 
     });
 
     assert.ok(existsSync(join(cwd, '.omp', 'skills', 'suggest', 'SKILL.md')), 'skills live where OMP discovers them');
-    assert.match(read(cwd, '.omp', 'AGENTS.md'), /rsc-suggest:start/, 'the always-on block is in the project context file');
+    const agentsMd = read(cwd, '.omp', 'AGENTS.md');
+    assert.match(agentsMd, /rsc-suggest:start/, 'the always-on block is in the project context file');
+    assert.match(agentsMd, /Native todo panel/, 'the main session is told how to feed OMP\'s live todo panel');
+    assert.match(agentsMd, /Native question form/, 'the main session is told to use OMP\'s native ask form');
+    assert.match(agentsMd, /`ask` tool/, 'the question section names the tool');
+    assert.match(read(cwd, '.omp', 'RULES.md'), /rsc-omp-rules:start/, 'the sticky rules block reaches task subagents');
+    assert.match(readFileSync(join(cwd, '.rsc', 'omp-bridge.mjs'), 'utf8'), new RegExp(OMP_TODO_MARKER),
+      'the bridge owns the todo default');
+    assert.equal(inspectOmpTodo(cwd).mode, 'wired');
 
     const loaderPath = join(cwd, ...OMP_LOADER.split('/'));
     const loader = readFileSync(loaderPath, 'utf8');
@@ -85,15 +100,25 @@ test('omp02 · install writes the native surfaces, the committed loader and the 
     assert.equal(state.knowledge.mode, 'wired');
     assert.equal(state.ompBridge.mode, 'wired');
     assert.ok(state.ompBridge.paths.every((path) => existsSync(path)));
+    assert.equal(state.ompRules.mode, 'wired');
+    assert.equal(inspectOmpRules(cwd).mode, 'wired');
 
     const healthy = doctor({ target: 'omp', cwd });
     assert.equal(healthy.hookWired, true);
     assert.equal(healthy.ompBridge.mode, 'wired');
+    assert.equal(healthy.ompTodo.mode, 'wired');
+    assert.equal(healthy.ompRules.mode, 'wired');
     assert.equal(healthy.healthy, true);
+
+    rmSync(join(cwd, '.omp', 'RULES.md'));
+    const brokenRules = doctor({ target: 'omp', cwd });
+    assert.equal(brokenRules.ompRules.mode, 'missing');
+    assert.equal(brokenRules.healthy, false, 'a missing sticky-rules block is not a healthy OMP install');
 
     rmSync(join(cwd, '.rsc', 'omp-bridge.mjs'));
     const broken = doctor({ target: 'omp', cwd });
     assert.equal(broken.ompBridge.mode, 'degraded');
+    assert.equal(broken.ompTodo.mode, 'missing');
     assert.ok(broken.ompBridge.missing.includes(join(cwd, '.rsc', 'omp-bridge.mjs')));
     assert.equal(broken.healthy, false, 'a loader with no bridge is not a wired hook');
   } finally {
@@ -110,6 +135,8 @@ test('omp03 · reinstall is idempotent and removal takes the loader, bridge and 
 
     const agentsMd = read(cwd, '.omp', 'AGENTS.md');
     assert.equal(agentsMd.match(/rsc-suggest:start/g).length, 1, 'the always-on block is not duplicated');
+    const rulesMd = read(cwd, '.omp', 'RULES.md');
+    assert.equal(rulesMd.match(/rsc-omp-rules:start/g).length, 1, 'the rules block is not duplicated');
     const loader = readFileSync(join(cwd, ...OMP_LOADER.split('/')), 'utf8');
     assert.equal(loader.match(/rsc-omp:managed/g).length, 1);
 
@@ -118,6 +145,7 @@ test('omp03 · reinstall is idempotent and removal takes the loader, bridge and 
     assert.ok(!existsSync(join(cwd, '.rsc', 'omp-bridge.mjs')), 'the machine-local bridge is withdrawn');
     assert.ok(!existsSync(join(cwd, '.omp', 'skills', 'suggest')), 'the managed skill is withdrawn');
     assert.doesNotMatch(readFileSync(join(cwd, '.omp', 'AGENTS.md'), 'utf8'), /rsc-suggest:start/);
+    assert.ok(!existsSync(ompRulesPath(cwd)), 'a rules file that held only rsc\'s block is withdrawn');
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }
@@ -135,15 +163,19 @@ test('omp04 · the bridge injects context, runs every guard and blocks on tool_c
 
     const { default: factory } = await import(join(cwd, '.rsc', 'omp-bridge.mjs'));
     const handlers = new Map();
-    await factory({ on(name, fn) { handlers.set(name, fn); } });
+    await factory({
+      on(name, fn) { handlers.set(name, fn); },
+      getActiveTools() { return ['ask']; },
+    });
     for (const event of ['session_start', 'before_agent_start', 'tool_call', 'tool_result', 'session_stop', 'session_shutdown']) {
       assert.equal(typeof handlers.get(event), 'function', `${event} is subscribed`);
     }
 
     const ctx = {
       cwd,
+      mode: 'tui',
       agent: { kind: 'main' },
-      hasUI: false,
+      hasUI: true,
       sessionManager: { getSessionId: () => 'omp-main', getSessionFile: () => null },
     };
     await handlers.get('session_start')({}, ctx);
@@ -151,7 +183,11 @@ test('omp04 · the bridge injects context, runs every guard and blocks on tool_c
 
     const start = await handlers.get('before_agent_start')({ reason: 'prompt' }, ctx);
     assert.match(start.message.content, /rsc lane decisor/, 'the per-turn lane gate reaches the model');
+    assert.match(start.message.content, /Native question form/, 'the interactive turn is told to use the native ask form');
     assert.equal(start.message.display, false, 'rsc context is not printed as if the person wrote it');
+
+    const printStart = await handlers.get('before_agent_start')({ reason: 'prompt' }, { ...ctx, mode: 'print', hasUI: false });
+    assert.doesNotMatch(printStart.message.content, /Native question form/, 'headless turns do not advertise ask');
 
     const blocked = await handlers.get('tool_call')({ toolName: 'bash', input: { command: 'rm -rf /' } }, ctx);
     assert.equal(blocked.block, true, 'a dangerous command is denied');
@@ -209,6 +245,10 @@ test('omp05 · the bridge paths are the loader plus exactly the modules the acce
     assert.ok(codeOnly.includes(join(cwd, '.rsc', 'shell-unwrap.mjs')), 'code guards keep shell-unwrap');
     assert.ok(codeOnly.includes(join(cwd, '.rsc', 'ship-guard.mjs')));
     assert.ok(!codeOnly.includes(join(cwd, '.rsc', 'danger-guard.mjs')));
+    // A plan that declined the always-on layer never writes the rules block, so the plan must not
+    // declare it as a governed path either.
+    assert.ok(managedPathsForInstall({ skillIds: ['suggest'], target: 'omp', cwd, policy: { alwaysOn: true } }).includes(ompRulesPath(cwd)));
+    assert.ok(!managedPathsForInstall({ skillIds: ['suggest'], target: 'omp', cwd, policy: { alwaysOn: false } }).includes(ompRulesPath(cwd)));
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }
@@ -253,6 +293,75 @@ test('omp07 · the machine-level resolver loads the bridge from a subdirectory, 
     assert.equal(report.ompUserLoader.mode, 'wired', 'doctor names the machine-level resolver');
     assert.notEqual(report.ompPlugin.mode, 'absent', 'doctor names the OMP plugin package');
     assert.ok(existsSync(join(ompPluginDir(), 'package.json')));
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('omp09 · RULES.md keeps the user prose, is idempotent and takes only its own block back', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'rsc-omp-rules-'));
+  const path = ompRulesPath(cwd);
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, '# My rules\n\nKeep this.\n');
+    wireOmpRules(cwd);
+    wireOmpRules(cwd);
+    const body = readFileSync(path, 'utf8');
+    assert.match(body, /# My rules/);
+    assert.equal(body.match(/rsc-omp-rules:start/g).length, 1, 'reinstall replaces the block instead of duplicating it');
+    assert.equal(inspectOmpRules(cwd).mode, 'wired');
+
+    unwireOmpRules(cwd);
+    const left = readFileSync(path, 'utf8');
+    assert.match(left, /# My rules/, 'the user\'s prose survives');
+    assert.doesNotMatch(left, /rsc-omp-rules:start/, 'only rsc\'s block is taken back');
+    assert.equal(inspectOmpRules(cwd).mode, 'manual');
+
+    // A file rsc created solely for its block is removed, not left as an empty shell.
+    const clean = mkdtempSync(join(tmpdir(), 'rsc-omp-rules-only-'));
+    try {
+      wireOmpRules(clean);
+      assert.ok(existsSync(ompRulesPath(clean)));
+      unwireOmpRules(clean);
+      assert.ok(!existsSync(ompRulesPath(clean)));
+    } finally { rmSync(clean, { recursive: true, force: true }); }
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('omp10 · the todo default is a default, never an override of the person\'s setting', async () => {
+  const calls = [];
+  const setting = (configured) => ({
+    isConfigured: () => configured,
+    override: (_scope, value) => calls.push(value),
+  });
+  const pi = { pi: { settings: { marker: true } } };
+  assert.equal(pinOmpTodoDefault(pi, () => setting(false)), true);
+  assert.deepEqual(calls, ['always']);
+  calls.length = 0;
+  assert.equal(pinOmpTodoDefault(pi, () => setting(true)), false, 'a configured value wins');
+  assert.deepEqual(calls, []);
+  assert.equal(pinOmpTodoDefault(pi, () => undefined), false);
+  assert.equal(pinOmpTodoDefault({}, () => setting(false)), false, 'not an OMP runtime');
+
+  const previous = process.env.RSC_NO_OMP_TODO;
+  process.env.RSC_NO_OMP_TODO = '1';
+  try {
+    assert.equal(await applyOmpTodoDefault(pi), false, 'the env opt-out wins before any import');
+  } finally {
+    if (previous === undefined) delete process.env.RSC_NO_OMP_TODO; else process.env.RSC_NO_OMP_TODO = previous;
+  }
+});
+
+test('omp11 · doctor names a bridge from before the todo default as stale, not broken', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'rsc-omp-todo-stale-'));
+  try {
+    mkdirSync(join(cwd, '.rsc'), { recursive: true });
+    writeFileSync(join(cwd, '.rsc', 'omp-bridge.mjs'), '// rsc-omp-bridge:managed\n');
+    const report = inspectOmpTodo(cwd);
+    assert.equal(report.mode, 'stale');
+    assert.match(report.action, /sync/, 'the way forward is the normal sync, not a repair');
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }

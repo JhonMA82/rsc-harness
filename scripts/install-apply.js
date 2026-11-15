@@ -28,6 +28,7 @@ import { wireKnowledge, unwireKnowledge, knowledgeManagedPaths, knowledgeArtifac
 import { wireGitPermissions, unwireGitPermissions, gitPermissionsPath } from '../targets/git-permissions.js';
 import { wireDeepseekBridge } from '../targets/deepseek-bridge.js';
 import { wireOmpBridge, unwireOmpBridge, wireOmpUserLoader, wireOmpPlugin, ompUserLoaderPath, ompPluginDir, ompBridgeManagedPaths, ompBridgeArtifactsPresent } from '../targets/omp-bridge.js';
+import { wireOmpRules, unwireOmpRules, ompRulesPath, ompRulesArtifactsPresent } from '../targets/omp-rules.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CLI_VERSION = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version;
@@ -145,7 +146,12 @@ export function managedPathsForInstall({ skillIds, agentIds = [], target, home, 
   out.push(...knowledgeManagedPaths(target, cwd));
   // OMP's lifecycle lives in a project hook loader plus the shared `.rsc/` modules. The loader is
   // committed, so it belongs in the backup and in the dry-run report like any generated file.
-  if (target === 'omp') out.push(...ompBridgeManagedPaths({ cwd, policy }));
+  if (target === 'omp') {
+    out.push(...ompBridgeManagedPaths({ cwd, policy }));
+    // A plan that declined the always-on layer also declined this managed block; declaring it
+    // as governed would make onboarding verify a file the same plan told the installer not to write.
+    if (policy?.alwaysOn !== false) out.push(ompRulesPath(cwd));
+  }
   if (gitPermissionsPath(target, cwd)) out.push(gitPermissionsPath(target, cwd)); // backed up before it is merged into
   if (targetHasAgents(target)) {
     const state = readState(paths.stateFile);
@@ -378,11 +384,17 @@ export async function applyInstall({ skillIds = [], agentIds = [], target, home,
   // one, exactly as the guards it selects do. The machine-level resolver covers OMP sessions started
   // in a subdirectory, where OMP does not discover the project loader at all.
   if (target === 'omp') {
+    const ompPolicy = policy || state.policy || {};
     state.ompBridge = {
-      ...wireOmpBridge(cwd, policy || state.policy || {}),
+      ...wireOmpBridge(cwd, ompPolicy),
       userLoader: wireOmpUserLoader(),
       plugin: wireOmpPlugin(undefined, CLI_VERSION),
     };
+    // RULES.md is the native sticky surface that reaches task subagents; AGENTS.md does not.
+    // An explicitly narrower plan (alwaysOn off) takes an older block back instead of adding one.
+    state.ompRules = ompPolicy.alwaysOn === false
+      ? { mode: 'off', paths: unwireOmpRules(cwd) }
+      : wireOmpRules(cwd);
   }
   if (gitPermissions === true) state.gitPermissions = wireGitPermissions(target, cwd);
   else if (gitPermissions === false) { unwireGitPermissions(target, cwd); state.gitPermissions = { mode: 'off' }; }
@@ -715,7 +727,10 @@ export function removeTargetInstall({ target, home, cwd = process.cwd() }) {
   unwireUpdate(target, cwd);
   unwireKnowledge(target, cwd);
   unwireGitPermissions(target, cwd);
-  if (target === 'omp') ignored.push(...unwireOmpBridge(cwd));
+  if (target === 'omp') {
+    unwireOmpRules(cwd);
+    ignored.push(...unwireOmpBridge(cwd));
+  }
   rmSync(paths.stateFile, { force: true });
   const gitignore = join(cwd, '.gitignore');
   if (existsSync(gitignore)) {
@@ -938,7 +953,7 @@ export async function purgeReport({ home, cwd = process.cwd(), withDocs = false,
         ...unwireUpdate(target, cwd),
         ...unwireKnowledge(target, cwd),
         ...unwireGitPermissions(target, cwd),
-        ...(target === 'omp' ? unwireOmpBridge(cwd) : []),
+        ...(target === 'omp' ? [...unwireOmpBridge(cwd), ...unwireOmpRules(cwd)] : []),
       ]) touchedConfigs.add(p);
       if (hadBootstrap && !existsSync(bootstrap)) removed.add(bootstrap);
     } else {
@@ -946,7 +961,7 @@ export async function purgeReport({ home, cwd = process.cwd(), withDocs = false,
         ...memoryArtifactsPresent(target, cwd),
         ...updateArtifactsPresent(target, cwd),
         ...knowledgeArtifactsPresent(target, cwd),
-        ...(target === 'omp' ? ompBridgeArtifactsPresent(cwd) : []),
+        ...(target === 'omp' ? [...ompBridgeArtifactsPresent(cwd), ...ompRulesArtifactsPresent(cwd)] : []),
       ]) touchedConfigs.add(p);
       if (paths.hookTarget && existsSync(paths.hookTarget)
         && /\.rsc\/|rsc-suggest:start|skills\/rsc\/suggest/.test(readFileSync(paths.hookTarget, 'utf8').replaceAll('\\\\', '/'))) {

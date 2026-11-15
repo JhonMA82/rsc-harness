@@ -18,6 +18,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 
 export const OMP_LOADER = '.omp/hooks/pre/rsc.js';
 const LOADER_MARKER = 'rsc-omp:managed';
+export const OMP_TODO_MARKER = 'rsc-omp-todo:managed';
 export const OMP_USER_LOADER_MARKER = 'rsc-omp-user:managed';
 export const OMP_PLUGIN_NAME = 'rsc-harness';
 const BRIDGE = 'omp-bridge.mjs';
@@ -286,6 +287,26 @@ export function ompBridgeArtifactsPresent(cwd = process.cwd()) {
   const bridge = join(cwd, '.rsc', BRIDGE);
   if (existsSync(bridge)) out.push(bridge);
   return out;
+}
+
+/**
+ * Doctor: the installed bridge contains the todo default. A bridge from a release before the
+ * integration is still a working guard bridge, but it does not feed OMP's live task panel; the
+ * action is the same one command, not a scary "broken".
+ */
+export function inspectOmpTodo(cwd = process.cwd()) {
+  const path = join(cwd, '.rsc', BRIDGE);
+  let body = '';
+  try { body = readFileSync(path, 'utf8'); } catch { /* reported below */ }
+  if (!body) {
+    return { mode: 'missing', path, action: 'Run `npx @ericrisco/rsc sync` to restore the OMP bridge.' };
+  }
+  if (body.includes(OMP_TODO_MARKER)) return { mode: 'wired', path, action: null };
+  return {
+    mode: 'stale',
+    path,
+    action: 'Run `npx @ericrisco/rsc sync` to add the native OMP todo default to this bridge.',
+  };
 }
 
 /** Doctor: the loader is ours, it names the bridge, and the bridge is on disk. */

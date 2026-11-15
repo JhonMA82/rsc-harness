@@ -20,16 +20,50 @@ export const UPDATE_NOTE = '**rsc updates.** Claude Code, Codex, Gemini CLI, Cur
   + 'own. In any other assistant, run `node .rsc/auto-update.mjs` once on the first turn of a session and relay any '
   + 'notice it prints in one line; "up to date" needs no mention.\n';
 
+// OMP is the only target here with a native todo panel. The skills keep owning the method and the
+// durable Markdown artifact; this section only tells the main session how to mirror that artifact
+// into the client's live view. It lives in AGENTS.md, not RULES.md, because task subagents cannot
+// call `todo` and should not pay for the instruction.
+export const OMP_TODO_SECTION = `## Native todo panel (Oh My Pi)
+
+This client has a live todo panel. On the FTD lane and the ASDD chain, create the list with the
+native \`todo\` tool before the first edit: one phase per stage, one task per checklist row or
+\`## Tasks\` row, keeping the row's ID when it has one. Mark \`start\` and \`done\` as the work happens.
+The markdown artifact is the durable record; the panel is how the person sees where the run is. Do
+not create a list for the Answer lane.`;
+
+// The compass already ends in 1–3 concrete options. OMP renders those natively through `ask`;
+// without this section the model turns the menu into prose because the skills never name a tool.
+// It is main-session guidance only: task subagents cannot prompt the person.
+export const OMP_ASK_SECTION = `## Native question form (Oh My Pi)
+
+When the compass's ➡️ line offers 1–3 real options and the session is interactive — and the lane is
+not autopilot and no skill sent the decision to the queue — use the native \`ask\` tool instead
+of a prose menu: one short \`<form>\` with one radio group, the recommended option preselected, and
+the same options in the same order. Keep the 📍/✅/🧭 lines and let the ➡️ line name the decision;
+the form carries its options. Use prose only in print/RPC/headless sessions, where \`ask\` has no UI,
+or when the question is genuinely open-ended. Never add an "Other" option: OMP supplies it.
+
+\`\`\`html
+<form>
+  <p>¿Cómo seguimos?</p>
+  <label><input type="radio" name="next" value="merge" checked> Mergear #2 y seguir (recomendado)</label>
+  <label><input type="radio" name="next" value="review"> Revisar #3 y #4 antes</label>
+  <label><input type="radio" name="next" value="stop"> Cerrar aquí</label>
+</form>
+\`\`\``;
+
 export function writeSkill(id, fromDir, toPath) {
   return linkOrCopy(fromDir, toPath);
 }
 
-export function wireHook(paths, sourceMd, policy = {}) {
+export function wireHook(paths, sourceMd, policy = {}, target = null) {
   const full = stripFrontmatter(readFileSync(sourceMd, 'utf8'));
   const body = policy.codeHooks === false
     ? `# rsc-suggest — always-on operations layer\n\nRead \`02-DOCS/wiki/harness/user-profile.md\` before acting. Use \`orient\` to keep the user situated and \`suggest\` to offer a missing skill only when the current task needs it. Close with the configured orientation block.\n`
     : full;
-  const block = `${MARK_START}\n${body}\n${UPDATE_NOTE}\n${MARK_END}`;
+  const extra = target === 'omp' ? `\n${OMP_TODO_SECTION}\n\n${OMP_ASK_SECTION}\n` : '';
+  const block = `${MARK_START}\n${body}${extra}\n${UPDATE_NOTE}\n${MARK_END}`;
   let doc = existsSync(paths.hookTarget) ? readFileSync(paths.hookTarget, 'utf8') : '';
   if (doc.includes(MARK_START)) {
     doc = doc.replace(new RegExp(`${MARK_START}[\\s\\S]*?${MARK_END}`), block);

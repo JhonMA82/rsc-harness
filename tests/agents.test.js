@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   AGENT_TARGET_IDS, targetHasAgents, writeDeveloperAgent, developerAgentPath,
-  readDeveloperTier, writeDeveloperTier,
+  readDeveloperTier, writeDeveloperTier, writeAgents, agentPath,
 } from '../targets/agents.js';
 
 test('the 9 agent-capable targets each render a developer agent with the right model contract', () => {
@@ -21,8 +21,22 @@ test('the 9 agent-capable targets each render a developer agent with the right m
     // every other target keeps its tier model.
     if (t === 'opencode' || t === 'omp') assert.doesNotMatch(c, /^model:/m, `${t} inherits the session model`);
     else assert.ok(/model/.test(c), `${t} carries a model`);
+    // OMP preloads the discipline the agent body points at; no other target has this field.
+    if (t === 'omp') assert.match(c, /^autoloadSkills: \[implement\]$/m, 'OMP developer autoloads implement');
+    else assert.doesNotMatch(c, /^autoloadSkills:/m, `${t} has no OMP autoload field`);
     if (p.endsWith('.json')) assert.doesNotThrow(() => JSON.parse(c), `${t} json parses`);
   }
+});
+
+test('OMP agents autoload the one skill they name; other targets never do', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'rsc-ag-omp-'));
+  writeAgents('omp', cwd, 'balanced', ['rust-reviewer']);
+  const rust = readFileSync(agentPath('omp', cwd, 'rust-reviewer'), 'utf8');
+  assert.match(rust, /^autoloadSkills: \[rust\]$/m, 'a stack reviewer preloads its stack skill');
+
+  writeAgents('claude', cwd, 'balanced', ['rust-reviewer']);
+  const claude = readFileSync(agentPath('claude', cwd, 'rust-reviewer'), 'utf8');
+  assert.doesNotMatch(claude, /^autoloadSkills:/m, 'the Claude agent format has no autoload field');
 });
 
 test('developer tier: balanced by default, heavy honored, light coerced to balanced (never light)', () => {

@@ -183,7 +183,9 @@ export function writeSkill(target, id, fromDir, toPath) {
 }
 
 export function wireHook(target, paths, sourceMd, policy) {
-  return ADAPTER[SPEC[target].adapter].wireHook(paths, sourceMd, policy);
+  // The target travels to the adapter so a target-specific surface (OMP's native todo panel)
+  // can be added to the shared Markdown block without giving every other assistant the text.
+  return ADAPTER[SPEC[target].adapter].wireHook(paths, sourceMd, policy, target);
 }
 
 // Inverse of wireHook — remove rsc's always-on surface for a target (settings.json

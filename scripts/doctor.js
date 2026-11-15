@@ -15,7 +15,8 @@ import { countGaps, listSkills, listAgents } from './lib/capabilities.js';
 import { resolveCommands, commandPath, targetHasCommands } from '../targets/commands.js';
 import { parseJsonc } from '../targets/git-permissions.js';
 import { inspectMemoryWiring } from '../targets/memory.js';
-import { inspectOmpBridge, inspectOmpUserLoader, inspectOmpPlugin } from '../targets/omp-bridge.js';
+import { inspectOmpBridge, inspectOmpUserLoader, inspectOmpPlugin, inspectOmpTodo } from '../targets/omp-bridge.js';
+import { inspectOmpRules, ompRulesPath } from '../targets/omp-rules.js';
 import { metricsSummary } from '../targets/session-memory-core.mjs';
 import { agentPath, targetHasAgents, effectiveAgentModel } from '../targets/agents.js';
 import { projectOptOuts } from '../targets/opt-outs.js';
@@ -278,6 +279,14 @@ export function doctor({ target, home, cwd }) {
   // sessions started in a subdirectory will find the same bridge.
   const ompUserLoader = target === 'omp' ? inspectOmpUserLoader() : null;
   const ompPlugin = target === 'omp' ? inspectOmpPlugin() : null;
+  const ompTodo = target === 'omp' ? inspectOmpTodo(root) : null;
+  // `.omp/RULES.md` is the sticky surface task subagents actually receive. Not a hook, but a
+  // missing block means the hard rules stop travelling at the first delegation.
+  const ompRules = target === 'omp'
+    ? (state.ompRules?.mode === 'off' || state.policy?.alwaysOn === false
+        ? { mode: 'off', path: ompRulesPath(root), action: null }
+        : inspectOmpRules(root))
+    : null;
   const report = {
     target,
     installed: Object.keys(state.skills),
@@ -295,6 +304,8 @@ export function doctor({ target, home, cwd }) {
     ompBridge,
     ompUserLoader,
     ompPlugin,
+    ompTodo,
+    ompRules,
     // The worktree cleanup's trigger is a git hook, and `.git/hooks/` is not cloned. So a repo can
     // carry a perfectly healthy harness and still never clean up, on every machine but the one that
     // ran the installer. Reported, never nagged about: `repair` is what puts it back (P6).
@@ -354,7 +365,10 @@ export function doctor({ target, home, cwd }) {
     report.onboarding = { status: 'incomplete', missing: ['<onboarding readiness could not be read>'], pending: [], action: String(error?.message || error).slice(0, 200) };
   }
   report.healthy = report.hookWired && !report.missing.length && !missingAgents.length && !missingCommands.length
-    && !report.opencodePluginsOutdated.length && !report.opencodeSkillsUnreachable.length;
+    && !report.opencodePluginsOutdated.length && !report.opencodeSkillsUnreachable.length
+    // A plan that declined the always-on layer also declined the managed rules block.
+    && (!ompRules || ompRules.mode === 'wired' || ompRules.mode === 'off')
+    && (!ompTodo || ompTodo.mode === 'wired');
   return report;
 }
 

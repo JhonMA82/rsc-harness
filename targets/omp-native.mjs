@@ -1,5 +1,6 @@
 /**
- * Target-local OMP 18.20.x interoperability. No changes to shared rsc skills or scripts.
+ * Target-local OMP native interoperability. No changes to shared rsc skills or scripts.
+ * Validated against OMP 18.20.2; feature detection keeps older builds safe.
  * Do not replace OMP's task/todo/ask runtimes: configure and use their native APIs.
  */
 import { existsSync } from 'node:fs';

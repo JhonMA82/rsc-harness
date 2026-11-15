@@ -14,8 +14,8 @@ import { execFile } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 // The native layer is optional like every sibling above: a `.rsc/` from before this module, or an
-// interrupted copy, must cost the 18.20 settings, never the guards, memory or lane gate.
-const native = await import('./omp-native-18-20.mjs').catch(() => null);
+// interrupted copy, must cost the native settings, never the guards, memory or lane gate.
+const native = await import('./omp-native.mjs').catch(() => null);
 const NO_NATIVE = { available: false, applied: [], preserved: [], warnings: [], effective: {} };
 const configureLiveOmpNative = (handle) => (native?.configureLiveOmpNative
   ? native.configureLiveOmpNative(handle) : Promise.resolve(NO_NATIVE));
@@ -278,10 +278,10 @@ export default async function rscOmp(pi) {
   // Native OMP diagnostics; reads active runtime settings, does not edit user config.
   if (typeof pi?.registerCommand === 'function') {
     pi.registerCommand('rsc-native-status', {
-      description: 'Inspect OMP 18.20.x/rsc capabilities, modes, approvals and memory',
+      description: 'Inspect OMP/rsc native capabilities, modes, approvals and memory',
       handler: async (_args, ctx) => {
         if (!native) {
-          ctx?.ui?.notify?.('rsc/OMP: native 18.20 module missing; run `rsc sync` to restore /rsc-native-status.', 'warning');
+          ctx?.ui?.notify?.('rsc/OMP: native module missing; run `rsc sync` to restore /rsc-native-status.', 'warning');
           return;
         }
         const applied = await configureLiveOmpNative(pi);
@@ -291,7 +291,7 @@ export default async function rscOmp(pi) {
           .map(k => k+'='+String(status[k]))
           .concat('tools.approval.eval='+String(status['tools.approval']?.eval));
         const lines = [
-          'rsc/OMP native 18.20.x',
+          'rsc/OMP native',
           'Settings: '+ settings.join(', '),
           'Preserved: '+ applied.preserved.join(', '),
           'Warnings: '+ [...applied.warnings,...status.notes].join('; '),

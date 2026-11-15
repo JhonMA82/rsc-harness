@@ -143,7 +143,7 @@ test('omp03 · reinstall is idempotent and removal takes the loader, bridge and 
     removeTargetInstall({ target: 'omp', cwd });
     assert.ok(!existsSync(join(cwd, ...OMP_LOADER.split('/'))), 'the committed loader is withdrawn');
     assert.ok(!existsSync(join(cwd, '.rsc', 'omp-bridge.mjs')), 'the machine-local bridge is withdrawn');
-    assert.ok(!existsSync(join(cwd, '.rsc', 'omp-native-18-20.mjs')), 'the native module is withdrawn with it');
+    assert.ok(!existsSync(join(cwd, '.rsc', 'omp-native.mjs')), 'the native module is withdrawn with it');
     assert.ok(!existsSync(join(cwd, '.omp', 'skills', 'suggest')), 'the managed skill is withdrawn');
     assert.doesNotMatch(readFileSync(join(cwd, '.omp', 'AGENTS.md'), 'utf8'), /rsc-suggest:start/);
     assert.ok(!existsSync(ompRulesPath(cwd)), 'a rules file that held only rsc\'s block is withdrawn');

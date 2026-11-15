@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import {
   configureOmpNative, approvalGranted, guardVerdict,
   nativeGuidance, nativeModeState, nativeStatus, memoryCoexistenceWarning,
-} from '../targets/omp-native-18-20.mjs';
+} from '../targets/omp-native.mjs';
 import bridge from '../targets/omp-bridge.mjs';
 
 function fakeRegistry(start={}, userKeys=[]) {
@@ -114,7 +114,7 @@ test('Native mode/settings and dual memory diagnostics are read-only',()=>{
   } finally {rmSync(project,{recursive:true,force:true});}
 });
 
-test('Bridge registers OMP 18.20 events and preserves context on before_agent_start retries',async()=>{
+test('Bridge registers OMP native events and preserves context on before_agent_start retries',async()=>{
   const project=mkdtempSync(join(tmpdir(),'omp-bridge-test-'));
   const previous=process.env.RSC_NO_UPDATE_CHECK;
   process.env.RSC_NO_UPDATE_CHECK='1';
@@ -256,7 +256,7 @@ test('The presenter compacts only finished cards and the status command answers'
       sessionModes:{getState:()=>({plan:'inactive'})},
     });
     assert.equal(notified.level,'info');
-    assert.match(notified.text,/rsc\/OMP native 18\.20\.x/);
+    assert.match(notified.text,/rsc\/OMP native/);
     assert.match(notified.text,/tools\.approval\.eval=/,'the documented validation value is printed');
     assert.match(notified.text,/session\.worktreeScope=/);
     assert.match(notified.text,/danger-guard\.mjs:present/);

@@ -13,6 +13,50 @@ import { existsSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+// The native layer is optional like every sibling above: a `.rsc/` from before this module, or an
+// interrupted copy, must cost the 18.20 settings, never the guards, memory or lane gate.
+const native = await import('./omp-native-18-20.mjs').catch(() => null);
+const NO_NATIVE = { available: false, applied: [], preserved: [], warnings: [], effective: {} };
+const configureLiveOmpNative = (handle) => (native?.configureLiveOmpNative
+  ? native.configureLiveOmpNative(handle) : Promise.resolve(NO_NATIVE));
+const modeFromContext = (ctx, fallback = null) => {
+  try { return ctx?.sessionModes?.getState?.() ?? fallback; } catch { return fallback; }
+};
+const nativeModeState = (ctx, fallback = null) => (native?.nativeModeState
+  ? native.nativeModeState(ctx, fallback) : modeFromContext(ctx, fallback));
+const PLAN_LINE = '- OMP Plan is ACTIVE: read/research/plan only; no edits, exec mutations, native /commit or implementation subagent until Plan is exited and rsc approval exists.';
+const nativeGuidance = (ctx, pi, modes = null, applied = null, options = {}) => {
+  if (native?.nativeGuidance) return native.nativeGuidance(ctx, pi, modes, applied, options);
+  // Without the native module the Plan block still has to hold: it is the one gate that needs no
+  // settings, only the mode state OMP exposes on the context.
+  return nativeModeState(ctx, modes)?.plan === 'active' ? PLAN_LINE : '';
+};
+const liveNativeStatus = (handle, ctx, root) => (native?.liveNativeStatus
+  ? native.liveNativeStatus(handle, ctx, root) : Promise.resolve({ ...NO_NATIVE, guardFiles: [] }));
+const approvalGranted = (answer) => (native?.approvalGranted
+  ? native.approvalGranted(answer) : answer === 'once');
+
+/** Same contract as the module's, so a missing sibling can never open a critical guard. */
+function guardVerdict(error, stdout, critical = false) {
+  if (native?.guardVerdict) return native.guardVerdict(error, stdout, critical);
+  if (error) {
+    return critical
+      ? { decision: 'deny', reason: 'rsc critical guard crashed/timed out; command denied. Repair harness or explicitly disable this guard.' }
+      : null;
+  }
+  const raw = String(stdout ?? '').trim();
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw)?.hookSpecificOutput;
+    if (parsed?.permissionDecision === 'allow') return null;
+    if (parsed?.permissionDecision === 'ask' || parsed?.permissionDecision === 'deny') {
+      return { decision: parsed.permissionDecision, reason: parsed.permissionDecisionReason || 'rsc guard denied this command.' };
+    }
+  } catch { /* invalid output */ }
+  return critical
+    ? { decision: 'deny', reason: 'rsc critical guard returned an invalid decision; command denied.' }
+    : null;
+}
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
@@ -26,6 +70,8 @@ const GUARD_TIMEOUT = Number(process.env.RSC_OMP_GUARD_TIMEOUT) || 5000;
 // write that state through a supported API. What an extension can do is make the first list the
 // default: when `todo.eager` is not configured by the person, pin it to `always`. OMP then forces
 // (or, on providers without forced tool choice, strongly reminds) one `todo init` before work.
+// Opt-in only (`RSC_OMP_TODO_EAGER=1`): forced eager creates a list on Answer turns too, and the
+// lanes decide when a panel belongs to the turn.
 const TODO_EAGER_SETTING = 'todo.eager';
 const TODO_OPT_OUT = 'RSC_NO_OMP_TODO';
 
@@ -67,7 +113,7 @@ function messageText(message) {
   return '';
 }
 
-function runGuard(script, root, payload, cwd) {
+function runGuard(script, root, payload, cwd, critical = false) {
   return new Promise((done) => {
     if (!existsSync(script)) { done(null); return; }
     let child;
@@ -79,26 +125,11 @@ function runGuard(script, root, payload, cwd) {
         encoding: 'utf8',
         maxBuffer: 1 << 20,
         env: { ...process.env, RSC_OMP: '1' },
-      }, (error, stdout) => {
-        // An empty stdout is "allow", including when the guard timed out. Only a parseable
-        // decision can ever block a command; an internal failure must not brick the shell.
-        const raw = String(stdout || '').trim();
-        if (!raw) { done(null); return; }
-        try {
-          const decision = JSON.parse(raw)?.hookSpecificOutput;
-          if (!decision?.permissionDecision) { done(null); return; }
-          done({
-            decision: decision.permissionDecision,
-            reason: decision.permissionDecisionReason || 'rsc guard refused this command.',
-          });
-        } catch {
-          done(null);
-        }
-      });
+      }, (error, stdout) => { done(guardVerdict(error, stdout, critical)); });
       child.stdin.on('error', () => { /* the child may exit before reading */ });
       child.stdin.end(payload);
-    } catch {
-      done(null);
+    } catch (error) {
+      done(guardVerdict(error, '', critical));
     }
   });
 }
@@ -110,7 +141,7 @@ async function askPerson(ctx, reason) {
         full: reason,
         compact: 'rsc guard: confirm this command before it runs',
       });
-      return Boolean(answer) && answer !== 'deny';
+      return approvalGranted(answer);
     }
   } catch { /* no UI, or it closed: treat as not confirmed */ }
   return false;
@@ -194,13 +225,18 @@ export default async function rscOmp(pi) {
     loadedApis.add(pi);
   }
   const mods = await loadAll();
-  await applyOmpTodoDefault(pi);
+  const initialNative = await configureLiveOmpNative(pi);
+  // Backward-compatible opt-in only. Unconditional todo.eager=always forces a list even on Answer.
+  if (process.env.RSC_OMP_TODO_EAGER === '1') await applyOmpTodoDefault(pi);
   const state = {
     resume: '',
     update: null,
     firstPrompt: true,
     stopRan: false,
     ended: false,
+    native: initialNative,
+    nativeModes: null,
+    warningsShown: false,
   };
 
   const projectOf = (dir) => {
@@ -230,6 +266,43 @@ export default async function rscOmp(pi) {
     }
   };
 
+  // Opt-in OMP transcript presenters are display-only: never suppress tool errors or policy denials.
+  if (typeof pi?.registerTranscriptPresenter === 'function') {
+    pi.registerTranscriptPresenter(block => {
+      if (block?.type !== 'toolCall' || block.isError || block.isPartial) return undefined;
+      if (block.toolName === 'task' || block.toolName === 'todo') return 'compact';
+      return undefined;
+    });
+  }
+
+  // Native OMP diagnostics; reads active runtime settings, does not edit user config.
+  if (typeof pi?.registerCommand === 'function') {
+    pi.registerCommand('rsc-native-status', {
+      description: 'Inspect OMP 18.20.x/rsc capabilities, modes, approvals and memory',
+      handler: async (_args, ctx) => {
+        if (!native) {
+          ctx?.ui?.notify?.('rsc/OMP: native 18.20 module missing; run `rsc sync` to restore /rsc-native-status.', 'warning');
+          return;
+        }
+        const applied = await configureLiveOmpNative(pi);
+        const cwd = resolve(ctx?.cwd || ROOT);
+        const status = await liveNativeStatus(pi, ctx, projectOf(cwd));
+        const settings = ['task.steps','task.autoParallel','todo.eager','todo.midRunNudges','commit.enabled','session.worktreeScope','memory.backend']
+          .map(k => k+'='+String(status[k]))
+          .concat('tools.approval.eval='+String(status['tools.approval']?.eval));
+        const lines = [
+          'rsc/OMP native 18.20.x',
+          'Settings: '+ settings.join(', '),
+          'Preserved: '+ applied.preserved.join(', '),
+          'Warnings: '+ [...applied.warnings,...status.notes].join('; '),
+          'Plan mode: '+ String(nativeModeState(ctx)?.plan || 'unknown'),
+          'Guards: '+ status.guardFiles.map(g => g.name+':'+(g.present?'present':'missing')).join(', '),
+        ];
+        ctx?.ui?.notify?.(lines.join('\n'),'info');
+      },
+    });
+  }
+
   const memoryChunks = (result) => {
     const chunks = [];
     try {
@@ -244,7 +317,10 @@ export default async function rscOmp(pi) {
     try {
       if (!isMain(ctx)) return;
       // A settings reload can drop a runtime override; re-pin before the first prompt of a session.
-      await applyOmpTodoDefault(pi);
+      state.native = await configureLiveOmpNative(pi);
+      if (process.env.RSC_OMP_TODO_EAGER === '1') await applyOmpTodoDefault(pi);
+      state.nativeModes = nativeModeState(ctx);
+      state.warningsShown = false;
       state.resume = '';
       state.firstPrompt = true;
       state.stopRan = false;
@@ -254,7 +330,10 @@ export default async function rscOmp(pi) {
       const result = lifecycle('start', { session_id: sessionId(null, ctx) }, ctx);
       state.resume = mods.memory?.contextFromNativeOutput?.('omp', result?.output)
         || result?.resume?.context || '';
-      if (!process.env.RSC_NO_UPDATE_CHECK && mods.update?.updateNotice) {
+      // This target extends an upstream npm package. A same-major automatic update from
+      // @ericrisco/rsc can overwrite custom target-only code even if it recognizes 'omp'.
+      // Opt-in after compatibility audit; keep normal updates for other targets unchanged.
+      if (!process.env.RSC_NO_UPDATE_CHECK && process.env.RSC_OMP_ALLOW_UPSTREAM_AUTO_UPDATE === '1' && mods.update?.updateNotice) {
         state.update = Promise.resolve()
           .then(() => mods.update.updateNotice(project))
           .then((notice) => String(notice || '').trim())
@@ -265,6 +344,33 @@ export default async function rscOmp(pi) {
 
   pi.on('session_start', async (_event, ctx) => { await begin(ctx); });
   pi.on('session_switch', async (_event, ctx) => { await begin(ctx); });
+  pi.on('session_clear', (_event, ctx) => {
+    if (!isMain(ctx)) return;
+    // /clear keeps the session ID. Do not rerun an update check or lose the rsc journal.
+    state.firstPrompt = true;
+    state.stopRan = false;
+    state.update = null;
+    state.nativeModes = nativeModeState(ctx);
+    state.warningsShown = false;
+    const restored = lifecycle('start', { session_id: sessionId(null, ctx) }, ctx);
+    state.resume = mods.memory?.contextFromNativeOutput?.('omp', restored?.output)
+      || restored?.resume?.context || '';
+  });
+  pi.on('mode_changed', (event, ctx) => {
+    if (isMain(ctx)) state.nativeModes = event?.state || nativeModeState(ctx);
+  });
+  pi.on('turn_start', (_event, ctx) => {
+    if (!isMain(ctx)) return;
+    // OMP may rerun before_agent_start with the same prompt. Consume only after turn acceptance.
+    state.firstPrompt = false;
+    state.resume = '';
+  });
+  pi.on('before_subagent_spawn', (event, ctx) => {
+    if (!isMain(ctx)) return;
+    const agentName = typeof event?.agent === 'string' ? event.agent : (event?.agent?.name || '');
+    if (nativeModeState(ctx, state.nativeModes)?.plan === 'active' && agentName === 'developer')
+      return { block: true, reason: 'rsc: an implementation worker cannot start in native OMP Plan mode.' };
+  });
 
   pi.on('before_agent_start', async (event, ctx) => {
     try {
@@ -278,16 +384,12 @@ export default async function rscOmp(pi) {
       const chunks = [];
 
       if (state.firstPrompt) {
-        state.firstPrompt = false;
         if (state.update) {
           const notice = await state.update;
           if (notice) chunks.push(notice);
         }
       }
-      if (state.resume) {
-        chunks.push(state.resume);
-        state.resume = '';
-      }
+      if (state.resume) chunks.push(state.resume);
 
       const sid = sessionId(event, ctx);
       for (const chunk of memoryChunks(lifecycle('request', { session_id: sid }, ctx))) chunks.push(chunk);
@@ -299,6 +401,9 @@ export default async function rscOmp(pi) {
 
       const ask = askReminder(pi, ctx);
       if (ask) chunks.push(ask);
+      const nativeHelp = nativeGuidance(ctx, pi, state.nativeModes, state.native, { warnings: !state.warningsShown });
+      if (state.native?.warnings?.length) state.warningsShown = true;
+      if (nativeHelp) chunks.push(nativeHelp);
 
       // The lane gate goes last: it must be the most recent instruction on the turn, exactly as
       // Claude's UserPromptSubmit order makes it. Its modules are absent when the plan has no lane.
@@ -337,8 +442,8 @@ export default async function rscOmp(pi) {
       // Claude-shaped stdin, one process per guard. They are independent by design; running them
       // together keeps the added latency near one Node start instead of four.
       const [danger, ship, branch, gitmoji] = await Promise.all([
-        runGuard(join(project, '.rsc', 'danger-guard.mjs'), project, payload, project),
-        runGuard(join(project, '.rsc', 'ship-guard.mjs'), cwd, payload, cwd),
+        runGuard(join(project, '.rsc', 'danger-guard.mjs'), project, payload, project, true),
+        runGuard(join(project, '.rsc', 'ship-guard.mjs'), cwd, payload, cwd, true),
         runGuard(join(project, '.rsc', 'branch-guard.mjs'), project, payload, project),
         runGuard(join(project, '.rsc', 'gitmoji-guard.mjs'), project, payload, project),
       ]);
@@ -362,6 +467,9 @@ export default async function rscOmp(pi) {
 
   pi.on('tool_result', async (event, ctx) => {
     try {
+      if (isMain(ctx) && event?.toolName === 'ask' && event?.details?.timedOut === true) {
+        return { additionalContext: 'rsc/OMP: native ask timed out and submitted preselected values. This is NOT explicit approval of a spec, branch, merge, publish, destructive operation or other formal decision. Keep that decision pending until the person confirms it.' };
+      }
       if (!isMain(ctx) || event?.isError) return;
       const cwd = resolve(ctx?.cwd || ROOT);
       const project = projectOf(cwd);

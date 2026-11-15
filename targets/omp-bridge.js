@@ -213,6 +213,7 @@ export function ompBridgeModuleNames(policy = {}) {
   const laneGate = policy.laneGate ?? policy.codeHooks !== false;
   return unique([
     BRIDGE,
+    'omp-native-18-20.mjs',
     ...COPY,
     ...(policy.dangerGuard === false ? [] : DANGER),
     ...(policy.codeHooks === false ? [] : CODE),
@@ -274,8 +275,10 @@ export function unwireOmpBridge(cwd = process.cwd()) {
   const touched = [];
   const loader = join(cwd, ...OMP_LOADER.split('/'));
   if (ours(loader)) { rmSync(loader, { force: true }); touched.push(loader); }
-  const bridge = join(cwd, '.rsc', BRIDGE);
-  if (existsSync(bridge)) { rmSync(bridge, { force: true }); touched.push(bridge); }
+  for (const name of [BRIDGE, 'omp-native-18-20.mjs']) {
+    const file = join(cwd, '.rsc', name);
+    if (existsSync(file)) { rmSync(file, { force: true }); touched.push(file); }
+  }
   return touched;
 }
 
@@ -284,8 +287,10 @@ export function ompBridgeArtifactsPresent(cwd = process.cwd()) {
   const out = [];
   const loader = join(cwd, ...OMP_LOADER.split('/'));
   if (ours(loader)) out.push(loader);
-  const bridge = join(cwd, '.rsc', BRIDGE);
-  if (existsSync(bridge)) out.push(bridge);
+  for (const name of [BRIDGE, 'omp-native-18-20.mjs']) {
+    const file = join(cwd, '.rsc', name);
+    if (existsSync(file)) out.push(file);
+  }
   return out;
 }
 

@@ -324,6 +324,39 @@ test('omp07 · the machine-level resolver loads the bridge from a subdirectory, 
   }
 });
 
+test('doctor reads a registered plugin as the resolver when the managed hook is gone', async () => {
+  const cwd = project();
+  const home = mkdtempSync(join(tmpdir(), 'rsc-omp-doctor-home-'));
+  const previous = {
+    HOME: process.env.HOME,
+    PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
+    RSC_NO_OMP_PLUGIN: process.env.RSC_NO_OMP_PLUGIN,
+  };
+  Object.assign(process.env, {
+    HOME: home,
+    PI_CODING_AGENT_DIR: join(home, '.omp', 'agent'),
+    RSC_NO_OMP_PLUGIN: '1',
+  });
+  try {
+    mkdirSync(join(home, '.omp', 'plugins', 'node_modules', 'rsc-harness'), { recursive: true });
+    writeFileSync(join(home, '.omp', 'plugins', 'omp-plugins.lock.json'), JSON.stringify({
+      plugins: { 'rsc-harness': { version: '0.0.1', enabled: true } }, settings: {},
+    }));
+    await applyInstall({ skillIds: ['suggest'], target: 'omp', cwd });
+    assert.ok(!existsSync(ompUserLoaderPath()), 'the managed hook was superseded');
+    const report = doctor({ target: 'omp', cwd });
+    assert.equal(report.ompPlugin.registered, true);
+    assert.equal(report.ompUserLoader.mode, 'superseded-by-plugin');
+    assert.equal(report.ompUserLoader.action, null, 'doctor must not ask for a hook the plugin replaces');
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('omp09 · RULES.md keeps the user prose, is idempotent and takes only its own block back', () => {
   const cwd = mkdtempSync(join(tmpdir(), 'rsc-omp-rules-'));
   const path = ompRulesPath(cwd);

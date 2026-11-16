@@ -277,8 +277,16 @@ export function doctor({ target, home, cwd }) {
   const ompBridge = target === 'omp' ? inspectOmpBridge(root, state.policy || {}) : null;
   // Not part of health: the project loader covers OMP started at the root. It only says whether
   // sessions started in a subdirectory will find the same bridge.
-  const ompUserLoader = target === 'omp' ? inspectOmpUserLoader() : null;
   const ompPlugin = target === 'omp' ? inspectOmpPlugin() : null;
+  const ompUserLoader = target === 'omp'
+    ? (() => {
+        const loader = inspectOmpUserLoader();
+        // A registered plugin is the resolver now: install removes the managed hook on purpose.
+        return ompPlugin?.registered && loader.mode === 'absent'
+          ? { ...loader, mode: 'superseded-by-plugin', action: null }
+          : loader;
+      })()
+    : null;
   const ompTodo = target === 'omp' ? inspectOmpTodo(root) : null;
   // `.omp/RULES.md` is the sticky surface task subagents actually receive. Not a hook, but a
   // missing block means the hard rules stop travelling at the first delegation.

@@ -25,7 +25,7 @@ const BRIDGE = 'omp-bridge.mjs';
 const COPY = ['copy-guard.mjs', 'copy-rules.mjs'];
 const DANGER = ['danger-guard.mjs', 'shell-unwrap.mjs'];
 const CODE = [
-  'shell-unwrap.mjs',
+  'shell-unwrap.mjs', 'risk-policy.mjs',
   'ship-guard.mjs', 'branch-guard.mjs', 'gitmoji-guard.mjs',
   'sello.mjs', 'asdd-gate.mjs', 'spec-completeness.mjs', 'trunk-policy.mjs',
 ];
@@ -295,8 +295,10 @@ export function wireOmpBridge(cwd = process.cwd(), policy = {}) {
   const laneGate = policy.laneGate ?? policy.codeHooks !== false;
   if (!laneGate) disabled.push(...LANE);
   // trunk-policy is shared with knowledge sync: never remove it here. hook-once is shared with
-  // Claude's session-start; same reason.
-  for (const name of new Set(disabled.filter((name) => name !== 'trunk-policy.mjs' && name !== 'hook-once.mjs'))) {
+  // Claude's session-start; risk-policy is shared with Claude's reaper and session-start. Same
+  // reason: a narrower OMP plan must not delete a sibling the other target still imports.
+  const keepShared = new Set(['trunk-policy.mjs', 'hook-once.mjs', 'risk-policy.mjs']);
+  for (const name of new Set(disabled.filter((name) => !keepShared.has(name)))) {
     if (wanted.has(name)) continue;
     const file = join(rsc, name);
     if (existsSync(file)) { rmSync(file, { force: true }); removed.push(file); }

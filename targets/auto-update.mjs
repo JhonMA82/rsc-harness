@@ -61,6 +61,14 @@ function fixesSince(list, installed, latest) {
 // `@latest` — what is published in between does not slip in. One attempt per version: a failure falls
 // back to asking, and is retried at most once a day.
 const stateFile = (root) => join(root, '.rsc', 'auto-update.json');
+
+// The detached preflight is plain Node, and the host is not always Node: OMP ships as a Bun-compiled
+// `omp` binary, so `process.execPath -e …` starts a session instead of the script and the update
+// silently never runs. Same rule as the guards and knowledge-sync's workerRuntime: only a real Node
+// executable runs the preflight; a Bun host falls back to the `node` on PATH.
+export function updateRuntime(execPath = process.execPath, versions = process.versions) {
+  return !versions.bun && /^node(?:\.exe)?$/i.test(String(execPath).split(/[\\/]/).pop()) ? execPath : 'node';
+}
 const logFile = (root) => join(root, '.rsc', 'auto-update.log');
 const AUTO_RUNNING_MS = 15 * 60 * 1000;
 const AUTO_RETRY_MS = 24 * 60 * 60 * 1000;
@@ -143,7 +151,7 @@ function launchUpdate(root, version, env) {
     'const real = run(args, false);',
     'process.exit(real.status || 0);',
   ].join('\n');
-  const child = spawn(process.execPath, ['-e', runner], {
+  const child = spawn(updateRuntime(), ['-e', runner], {
     cwd: root,
     detached: true,
     stdio: ['ignore', log, log],

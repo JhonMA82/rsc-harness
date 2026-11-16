@@ -11,7 +11,7 @@
 // knowledge and the copy guard: a subagent's turn is not a person's turn.
 import { existsSync } from 'node:fs';
 import { execFile } from 'node:child_process';
-import { basename, dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 // The native layer is optional like every sibling above: a `.rsc/` from before this module, or an
 // interrupted copy, must cost the native settings, never the guards, memory or lane gate.
@@ -69,7 +69,7 @@ const GUARD_TIMEOUT = Number(process.env.RSC_OMP_GUARD_TIMEOUT) || 5000;
 // guard then times out into a deny. Same rule as knowledge-sync's workerRuntime: only a real Node
 // executable may run a guard, and a Bun host always falls back to the `node` on PATH.
 export function guardRuntime(execPath = process.execPath, versions = process.versions) {
-  return !versions.bun && /^node(?:\.exe)?$/i.test(basename(execPath)) ? execPath : 'node';
+  return !versions.bun && /^node(?:\.exe)?$/i.test(String(execPath).split(/[\\/]/).pop()) ? execPath : 'node';
 }
 
 // Whether the host answers its own approval prompts. OMP resolves the policy before any prompt:

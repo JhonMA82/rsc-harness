@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { updateNotice, updateRuntime } from '../targets/auto-update.mjs';
 
 // The update notice asked, and asking depended on an agent relaying it: people kept running bugs
 // that were already fixed. Now a release in the same major installs itself in the background, and a
@@ -307,4 +308,35 @@ test('the rules file of an assistant without hooks tells the agent to run the mo
   }
   // Claude Code checks from its hook: its always-on body does not carry the instruction.
   assert.doesNotMatch(readFileSync(join(ROOT, 'skills', 'suggest', 'SKILL.md'), 'utf8'), /auto-update\.mjs/);
+});
+
+test('the detached preflight runs on Node even when the host binary is not Node', async () => {
+  const p = project('2.1.0');
+  const node = process.execPath;
+  const bun = Object.getOwnPropertyDescriptor(process.versions, 'bun');
+  let out = '';
+  try {
+    // OMP's extension host reports its own Bun-compiled binary as execPath: `omp -e runner` starts a
+    // session instead of the preflight, and the background update silently never happens.
+    assert.equal(updateRuntime('/opt/omp/bin/omp', { bun: '1.2.0' }), 'node');
+    assert.equal(updateRuntime('/usr/bin/node', { bun: '1.2.0' }), 'node');
+    assert.equal(updateRuntime(node, {}), node);
+    assert.equal(updateRuntime('C:\\Program Files\\nodejs\\node.exe', {}), 'C:\\Program Files\\nodejs\\node.exe');
+
+    Object.defineProperty(process, 'execPath', { value: join(tmpdir(), 'rsc-host-not-node'), configurable: true });
+    process.versions.bun = '1.2.0';
+    out = await updateNotice(p.root, {
+      ...process.env,
+      RSC_NO_UPDATE_CHECK: '',
+      RSC_LATEST_JSON: '',
+      RSC_LATEST: '2.1.1',
+      RSC_AUTO_UPDATE_CMD: JSON.stringify([node, p.fake]),
+    });
+  } finally {
+    Object.defineProperty(process, 'execPath', { value: node, configurable: true });
+    if (bun) Object.defineProperty(process.versions, 'bun', bun); else delete process.versions.bun;
+  }
+  assert.match(out, /rsc updating/);
+  assert.ok(waitFor(join(p.root, 'called.json')), 'the preflight ran under Node, not the host binary');
+  assert.deepEqual(JSON.parse(readFileSync(join(p.root, 'called.json'), 'utf8')).args, ['sync', '--target', 'claude,codex']);
 });

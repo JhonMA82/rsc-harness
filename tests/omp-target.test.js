@@ -17,7 +17,7 @@ import {
   OMP_LOADER, OMP_USER_LOADER_MARKER, OMP_PLUGIN_NAME, OMP_TODO_MARKER, inspectOmpBridge, inspectOmpPlugin,
   inspectOmpTodo, ompAgentDir, ompBridgeManagedPaths, ompPluginDir, ompUserLoaderPath, wireOmpPlugin, wireOmpUserLoader,
 } from '../targets/omp-bridge.js';
-import { applyOmpTodoDefault, guardRuntime, hostAutoApproves, pinOmpTodoDefault } from '../targets/omp-bridge.mjs';
+import { applyOmpTodoDefault, guardRuntime, hostAutoApproves, pinOmpTodoDefault, readPluginSwitches } from '../targets/omp-bridge.mjs';
 import {
   inspectOmpRules, ompRulesPath, unwireOmpRules, wireOmpRules,
 } from '../targets/omp-rules.js';
@@ -100,6 +100,10 @@ test('omp02 · install writes the native surfaces, the committed loader and the 
     assert.equal(state.knowledge.mode, 'wired');
     assert.equal(state.ompBridge.mode, 'wired');
     assert.ok(state.ompBridge.paths.every((path) => existsSync(path)));
+    const manifest = JSON.parse(readFileSync(join(ompPluginDir(), 'package.json'), 'utf8'));
+    assert.deepEqual(Object.keys(manifest.omp.settings), ['guards', 'native', 'memory', 'knowledge', 'lane', 'update']);
+    assert.ok(Object.values(manifest.omp.settings).every((s) => s.type === 'boolean' && s.default === true),
+      'Settings → Plugins renders one on/off row per switch, on by default');
     assert.equal(state.ompRules.mode, 'wired');
     assert.equal(inspectOmpRules(cwd).mode, 'wired');
 
@@ -528,5 +532,64 @@ test('omp12 · guards run under Node when the OMP host binary is not Node', asyn
     Object.defineProperty(process, 'execPath', { value: node, configurable: true });
     if (bun) Object.defineProperty(process.versions, 'bun', bun); else delete process.versions.bun;
     rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('omp14 · the plugin toggles turn features off for the whole bridge', async () => {
+  const saved = process.env.RSC_OMP_PLUGIN_CONFIG;
+  const cwd = project();
+  const quiet = project();
+  const writeSwitches = (dir, switches) => {
+    const file = join(dir, 'plugin-registry.json');
+    writeFileSync(file, JSON.stringify({ plugins: {}, settings: { 'rsc-harness': switches } }));
+    return file;
+  };
+  try {
+    assert.deepEqual(readPluginSwitches({ RSC_OMP_PLUGIN_CONFIG: join(cwd, 'missing.json') }),
+      { guards: true, native: true, memory: true, knowledge: true, lane: true, update: true },
+      'no registry means nothing was turned off');
+    const partial = writeSwitches(cwd, { guards: 'false', native: false, memory: true });
+    assert.equal(readPluginSwitches({ RSC_OMP_PLUGIN_CONFIG: partial }).guards, false);
+    assert.equal(readPluginSwitches({ RSC_OMP_PLUGIN_CONFIG: partial }).native, false);
+    assert.equal(readPluginSwitches({ RSC_OMP_PLUGIN_CONFIG: partial }).memory, true);
+
+    await applyInstall({ skillIds: ['suggest'], target: 'omp', cwd });
+    const ctx = {
+      cwd,
+      mode: 'tui',
+      agent: { kind: 'main' },
+      hasUI: false,
+      sessionManager: { getSessionId: () => 'omp-main', getSessionFile: () => null },
+    };
+    const handlersAt = async (dir) => {
+      process.env.RSC_OMP_PLUGIN_CONFIG = join(dir, 'plugin-registry.json');
+      const { default: factory } = await import(pathToFileURL(join(dir, '.rsc', 'omp-bridge.mjs')).href);
+      const handlers = new Map();
+      await factory({ on(name, fn) { handlers.set(name, fn); }, getActiveTools: () => ['ask'], pi: { settings: {} } });
+      return handlers;
+    };
+    const wipe = { toolName: 'bash', input: { command: 'rm -rf /' } };
+
+    writeSwitches(cwd, {});
+    const on = await handlersAt(cwd);
+    assert.equal((await on.get('tool_call')(wipe, ctx))?.block, true, 'on by default: the wipe is blocked');
+
+    writeSwitches(cwd, { guards: false });
+    const off = await handlersAt(cwd);
+    assert.equal(await off.get('tool_call')(wipe, ctx), undefined, 'guards off: the bridge stays out of the way');
+
+    await applyInstall({ skillIds: ['suggest'], target: 'omp', cwd: quiet });
+    writeSwitches(quiet, { guards: false, native: false, memory: false, knowledge: false, lane: false, update: false });
+    const silent = await handlersAt(quiet);
+    const quietCtx = { ...ctx, cwd: quiet, sessionManager: { getSessionId: () => 'omp-quiet', getSessionFile: () => null } };
+    await silent.get('session_start')({}, quietCtx);
+    assert.ok(!existsSync(join(quiet, '.rsc', 'memory', 'anchors', 'omp--omp-quiet.json')),
+      'memory off: no journal for the session');
+    assert.equal(await silent.get('before_agent_start')({ reason: 'prompt' }, quietCtx), undefined,
+      'everything off: no context chunk at all');
+  } finally {
+    if (saved === undefined) delete process.env.RSC_OMP_PLUGIN_CONFIG; else process.env.RSC_OMP_PLUGIN_CONFIG = saved;
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(quiet, { recursive: true, force: true });
   }
 });

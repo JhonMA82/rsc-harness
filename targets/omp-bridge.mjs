@@ -9,9 +9,10 @@
 // clone that only has part of `.rsc/`, still runs what is there; nothing here may throw inside an
 // OMP event. Tool guards run in every session. Only the top-level session owns memory, update,
 // knowledge and the copy guard: a subagent's turn is not a person's turn.
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 // The native layer is optional like every sibling above: a `.rsc/` from before this module, or an
 // interrupted copy, must cost the native settings, never the guards, memory or lane gate.
@@ -87,6 +88,33 @@ export function hostAutoApproves(registry, scope) {
 }
 
 const HOST_AUTO_APPROVES = 'OMP answers tool approvals itself right now (tools.approvalMode = yolo or tools.approval.bash = allow), so this confirmation never reached you. Run the command yourself, or set tools.approvalMode to always-ask (or tools.approval.bash to prompt) and retry.';
+
+// The plugin page in Settings → Plugins renders one toggle per boolean in the manifest's `settings`
+// map (package.json → omp.settings). OMP stores what the person picks in its plugin registry; the
+// bridge reads that registry at session start, so a toggle is the same opt-out for the committed
+// project loader and for the machine-level resolver. Missing registry = every switch stays on.
+export const PLUGIN_NAME = 'rsc-harness';
+export const PLUGIN_SWITCHES = ['guards', 'native', 'memory', 'knowledge', 'lane', 'update'];
+
+/** The registry OMP writes when a plugin toggle changes. Beside the agent dir; RSC_OMP_PLUGIN_CONFIG
+ *  overrides it for tests and unusual layouts. */
+export function pluginConfigPath(env = process.env) {
+  if (env.RSC_OMP_PLUGIN_CONFIG) return env.RSC_OMP_PLUGIN_CONFIG;
+  const agent = env.PI_CODING_AGENT_DIR;
+  return join(agent ? dirname(resolve(agent)) : join(homedir(), '.omp'), 'plugins', 'omp-plugins.lock.json');
+}
+
+/** Pure read of the switch map: an unreadable or absent registry keeps the harness fully on. */
+export function readPluginSwitches(env = process.env) {
+  const on = Object.fromEntries(PLUGIN_SWITCHES.map((key) => [key, true]));
+  try {
+    const saved = JSON.parse(readFileSync(pluginConfigPath(env), 'utf8'))?.settings?.[PLUGIN_NAME] || {};
+    for (const key of PLUGIN_SWITCHES) {
+      if (saved[key] === false || String(saved[key]).toLowerCase() === 'false') on[key] = false;
+    }
+  } catch { /* no plugin registry here: nothing was turned off */ }
+  return on;
+}
 
 // rsc-omp-todo:managed
 //
@@ -252,7 +280,8 @@ export default async function rscOmp(pi) {
     loadedApis.add(pi);
   }
   const mods = await loadAll();
-  const initialNative = await configureLiveOmpNative(pi);
+  const switches = readPluginSwitches();
+  const initialNative = switches.native ? await configureLiveOmpNative(pi) : NO_NATIVE;
   // Backward-compatible opt-in only. Unconditional todo.eager=always forces a list even on Answer.
   if (process.env.RSC_OMP_TODO_EAGER === '1') await applyOmpTodoDefault(pi);
   const state = {
@@ -281,6 +310,7 @@ export default async function rscOmp(pi) {
   };
 
   const lifecycle = (event, native, ctx) => {
+    if (!switches.memory) return null;
     try {
       return mods.memory?.handleLifecycle?.({
         target: 'omp',
@@ -311,6 +341,10 @@ export default async function rscOmp(pi) {
           ctx?.ui?.notify?.('rsc/OMP: native module missing; run `rsc sync` to restore /rsc-native-status.', 'warning');
           return;
         }
+        if (!switches.native) {
+          ctx?.ui?.notify?.('rsc/OMP: the native integration is turned off in Settings → Plugins → rsc-harness.', 'info');
+          return;
+        }
         const applied = await configureLiveOmpNative(pi);
         const cwd = resolve(ctx?.cwd || ROOT);
         const status = await liveNativeStatus(pi, ctx, projectOf(cwd));
@@ -332,6 +366,7 @@ export default async function rscOmp(pi) {
 
   const memoryChunks = (result) => {
     const chunks = [];
+    if (!switches.memory) return chunks;
     try {
       const context = mods.memory?.contextFromNativeOutput?.('omp', result?.output);
       if (context) chunks.push(context);
@@ -344,7 +379,7 @@ export default async function rscOmp(pi) {
     try {
       if (!isMain(ctx)) return;
       // A settings reload can drop a runtime override; re-pin before the first prompt of a session.
-      state.native = await configureLiveOmpNative(pi);
+      state.native = switches.native ? await configureLiveOmpNative(pi) : NO_NATIVE;
       if (process.env.RSC_OMP_TODO_EAGER === '1') await applyOmpTodoDefault(pi);
       state.nativeModes = nativeModeState(ctx);
       state.warningsShown = false;
@@ -355,12 +390,13 @@ export default async function rscOmp(pi) {
       const cwd = resolve(ctx?.cwd || ROOT);
       const project = projectOf(cwd);
       const result = lifecycle('start', { session_id: sessionId(null, ctx) }, ctx);
-      state.resume = mods.memory?.contextFromNativeOutput?.('omp', result?.output)
-        || result?.resume?.context || '';
+      state.resume = switches.memory
+        ? (mods.memory?.contextFromNativeOutput?.('omp', result?.output) || result?.resume?.context || '')
+        : '';
       // This target extends an upstream npm package. A same-major automatic update from
       // @ericrisco/rsc can overwrite custom target-only code even if it recognizes 'omp'.
       // Opt-in after compatibility audit; keep normal updates for other targets unchanged.
-      if (!process.env.RSC_NO_UPDATE_CHECK && process.env.RSC_OMP_ALLOW_UPSTREAM_AUTO_UPDATE === '1' && mods.update?.updateNotice) {
+      if (switches.update && !process.env.RSC_NO_UPDATE_CHECK && process.env.RSC_OMP_ALLOW_UPSTREAM_AUTO_UPDATE === '1' && mods.update?.updateNotice) {
         state.update = Promise.resolve()
           .then(() => mods.update.updateNotice(project))
           .then((notice) => String(notice || '').trim())
@@ -380,8 +416,9 @@ export default async function rscOmp(pi) {
     state.nativeModes = nativeModeState(ctx);
     state.warningsShown = false;
     const restored = lifecycle('start', { session_id: sessionId(null, ctx) }, ctx);
-    state.resume = mods.memory?.contextFromNativeOutput?.('omp', restored?.output)
-      || restored?.resume?.context || '';
+    state.resume = switches.memory
+      ? (mods.memory?.contextFromNativeOutput?.('omp', restored?.output) || restored?.resume?.context || '')
+      : '';
   });
   pi.on('mode_changed', (event, ctx) => {
     if (isMain(ctx)) state.nativeModes = event?.state || nativeModeState(ctx);
@@ -395,7 +432,7 @@ export default async function rscOmp(pi) {
   pi.on('before_subagent_spawn', (event, ctx) => {
     if (!isMain(ctx)) return;
     const agentName = typeof event?.agent === 'string' ? event.agent : (event?.agent?.name || '');
-    if (nativeModeState(ctx, state.nativeModes)?.plan === 'active' && agentName === 'developer')
+    if (switches.native && nativeModeState(ctx, state.nativeModes)?.plan === 'active' && agentName === 'developer')
       return { block: true, reason: 'rsc: an implementation worker cannot start in native OMP Plan mode.' };
   });
 
@@ -421,28 +458,34 @@ export default async function rscOmp(pi) {
       const sid = sessionId(event, ctx);
       for (const chunk of memoryChunks(lifecycle('request', { session_id: sid }, ctx))) chunks.push(chunk);
 
-      try {
-        const said = mods.knowledge?.onRequest?.(project);
-        if (said) chunks.push(`Cuéntale esto al usuario en una línea:\n${said}`);
-      } catch { /* knowledge sync is optional and fail-open */ }
+      if (switches.knowledge) {
+        try {
+          const said = mods.knowledge?.onRequest?.(project);
+          if (said) chunks.push(`Cuéntale esto al usuario en una línea:\n${said}`);
+        } catch { /* knowledge sync is optional and fail-open */ }
+      }
 
-      const ask = askReminder(pi, ctx);
+      const ask = switches.native ? askReminder(pi, ctx) : '';
       if (ask) chunks.push(ask);
-      const nativeHelp = nativeGuidance(ctx, pi, state.nativeModes, state.native, { warnings: !state.warningsShown });
+      const nativeHelp = switches.native
+        ? nativeGuidance(ctx, pi, state.nativeModes, state.native, { warnings: !state.warningsShown })
+        : '';
       if (state.native?.warnings?.length) state.warningsShown = true;
       if (nativeHelp) chunks.push(nativeHelp);
 
       // The lane gate goes last: it must be the most recent instruction on the turn, exactly as
       // Claude's UserPromptSubmit order makes it. Its modules are absent when the plan has no lane.
-      try {
-        if (mods.gate?.SDD_GATE_TEXT && !existsSync(join(project, '.rsc', '.no-feature-gate'))) {
-          let rule = '- Default branch state unknown: ask before a code change where it goes.\n';
-          try {
-            if (mods.trunk?.branchRuleLine) rule = mods.trunk.branchRuleLine(project);
-          } catch { /* safe default above */ }
-          chunks.push(mods.gate.SDD_GATE_TEXT + rule);
-        }
-      } catch { /* a missing gate must not cost the turn */ }
+      if (switches.lane) {
+        try {
+          if (mods.gate?.SDD_GATE_TEXT && !existsSync(join(project, '.rsc', '.no-feature-gate'))) {
+            let rule = '- Default branch state unknown: ask before a code change where it goes.\n';
+            try {
+              if (mods.trunk?.branchRuleLine) rule = mods.trunk.branchRuleLine(project);
+            } catch { /* safe default above */ }
+            chunks.push(mods.gate.SDD_GATE_TEXT + rule);
+          }
+        } catch { /* a missing gate must not cost the turn */ }
+      }
 
       if (!chunks.length) return;
       return { message: customMessage(chunks) };
@@ -454,6 +497,7 @@ export default async function rscOmp(pi) {
   // Guards run in every session: a subagent running `rm -rf` is still destructive.
   pi.on('tool_call', async (event, ctx) => {
     try {
+      if (!switches.guards) return;
       if (event?.toolName !== 'bash') return;
       const command = event?.input?.command;
       if (typeof command !== 'string' || !command) return;
@@ -548,7 +592,9 @@ export default async function rscOmp(pi) {
       const stop = Boolean(event?.stop_hook_active);
 
       lifecycle('turn', { session_id: sid, stop_hook_active: stop }, ctx);
-      try { mods.knowledge?.onTurn?.(project); } catch { /* fail-open */ }
+      if (switches.knowledge) {
+        try { mods.knowledge?.onTurn?.(project); } catch { /* fail-open */ }
+      }
 
       if (!canBlock || !mods.copy?.decide) return;
       const transcript = event?.session_file || ctx?.sessionManager?.getSessionFile?.();

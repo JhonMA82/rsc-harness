@@ -152,11 +152,23 @@ function cliVersion() {
   try { return JSON.parse(readFileSync(join(HERE, '..', 'package.json'), 'utf8')).version || '0.0.0'; } catch { return '0.0.0'; }
 }
 
+// One boolean per switch the bridge honours (readPluginSwitches). OMP's Settings → Plugins page
+// renders these as on/off rows and stores them in its plugin registry; the descriptions are what
+// the person reads under each row.
+const PLUGIN_SETTINGS = {
+  guards: { type: 'boolean', default: true, description: 'Run the bash guards (danger, ship, branch, gitmoji) on every command.' },
+  native: { type: 'boolean', default: true, description: 'Apply and announce the OMP native settings (task steps, todo nudges, Plan gate).' },
+  memory: { type: 'boolean', default: true, description: 'Journal the session and inject the continuation context.' },
+  knowledge: { type: 'boolean', default: true, description: 'Run the knowledge sync on each turn.' },
+  lane: { type: 'boolean', default: true, description: 'Inject the per-turn lane gate.' },
+  update: { type: 'boolean', default: true, description: 'Show the rsc update notice once per session.' },
+};
+
 const pluginPackage = (version) => `${JSON.stringify({
   name: OMP_PLUGIN_NAME,
   version,
   type: 'module',
-  omp: { extensions: ['./index.js'] },
+  omp: { extensions: ['./index.js'], settings: PLUGIN_SETTINGS },
 }, null, 2)}\n`;
 
 /** OMP keeps installed plugins in one machine-level registry, with a lock entry and a symlink. */

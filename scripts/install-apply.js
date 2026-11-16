@@ -27,7 +27,7 @@ import { wireUpdate, unwireUpdate, updateManagedPaths, updateArtifactsPresent } 
 import { wireKnowledge, unwireKnowledge, knowledgeManagedPaths, knowledgeArtifactsPresent } from '../targets/knowledge-wiring.js';
 import { wireGitPermissions, unwireGitPermissions, gitPermissionsPath } from '../targets/git-permissions.js';
 import { wireDeepseekBridge } from '../targets/deepseek-bridge.js';
-import { wireOmpBridge, unwireOmpBridge, wireOmpUserLoader, wireOmpPlugin, ompUserLoaderPath, ompPluginDir, ompBridgeManagedPaths, ompBridgeArtifactsPresent } from '../targets/omp-bridge.js';
+import { wireOmpBridge, unwireOmpBridge, wireOmpUserLoader, unwireOmpUserLoader, wireOmpPlugin, ompUserLoaderPath, ompPluginDir, ompBridgeManagedPaths, ompBridgeArtifactsPresent } from '../targets/omp-bridge.js';
 import { wireOmpRules, unwireOmpRules, ompRulesPath, ompRulesArtifactsPresent } from '../targets/omp-rules.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -385,10 +385,17 @@ export async function applyInstall({ skillIds = [], agentIds = [], target, home,
   // in a subdirectory, where OMP does not discover the project loader at all.
   if (target === 'omp') {
     const ompPolicy = policy || state.policy || {};
+    const ompPlugin = wireOmpPlugin(undefined, CLI_VERSION);
+    // One resolver, not two: plugin extension APIs have distinct object identities.
+    // Remove only our managed legacy hook; never delete a user's hook. A plugin linked by an
+    // earlier version is still loaded by OMP even when this run cannot re-register it.
+    const ompUserLoader = ompPlugin.registered || ompPlugin.linked
+      ? { mode: 'superseded-by-plugin', paths: unwireOmpUserLoader() }
+      : wireOmpUserLoader();
     state.ompBridge = {
       ...wireOmpBridge(cwd, ompPolicy),
-      userLoader: wireOmpUserLoader(),
-      plugin: wireOmpPlugin(undefined, CLI_VERSION),
+      userLoader: ompUserLoader,
+      plugin: ompPlugin,
     };
     // RULES.md is the native sticky surface that reaches task subagents; AGENTS.md does not.
     // An explicitly narrower plan (alwaysOn off) takes an older block back instead of adding one.

@@ -167,7 +167,9 @@ export function nativeStatus(pi, lookup, ctx, root) {
   const notes = [];
   if (values['memory.backend'] && values['memory.backend'] !== 'off') notes.push('Dual memory; rsc wiki remains authoritative');
   if (values['commit.enabled'] === true) notes.push('Native commit may bypass rsc shell guards');
-  if (values['tools.approval']?.eval === 'allow') notes.push('Eval allowed; shell guards do not cover eval execution');
+  if (values['tools.approval']?.eval === 'allow') notes.push('WARNING: eval explicitly allowed; RSC shell guards do not protect subprocesses launched from eval');
+  if (values['tools.approval']?.eval !== 'deny') notes.push('Eval can spawn processes outside RSC bash guards. RSC_OMP_STRICT_EXEC=1 blocks eval tool calls; tools.approval.eval=deny is another operator policy.');
+  if (process.env.RSC_OMP_STRICT_EXEC === '1') notes.push('RSC strict exec: eval tool calls are blocked; this is not a filesystem or process sandbox');
   return {
     ...values,
     modes,

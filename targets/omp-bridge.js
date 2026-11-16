@@ -90,15 +90,25 @@ export default async function rscOmpUser(pi) {
 }
 `;
 
+/** OMP derives its config root from os.homedir(). Git Bash exports a POSIX HOME on Windows, which
+ *  path.join would turn into a drive-relative path; USERPROFILE is the native equivalent there. */
+function homeOf(env) {
+  if (process.platform === 'win32') return env.USERPROFILE || env.HOME || homedir();
+  return env.HOME || homedir();
+}
+
 /** OMP's machine-level agent directory, the same one it uses for user hooks and profiles. */
 export function ompAgentDir(env = process.env) {
-  const value = String(env.PI_CODING_AGENT_DIR || '').trim();
-  if (value) return value;
-  const profile = String(env.PI_PROFILE || env.OMP_PROFILE || '').trim();
-  if (/^[A-Za-z0-9._-]+$/.test(profile) && profile !== 'default') {
-    return join(homedir(), '.omp', 'profiles', profile, 'agent');
+  const home = homeOf(env);
+  const configDir = env.PI_CONFIG_DIR || '.omp';
+  // Named profiles take priority over an inherited PI_CODING_AGENT_DIR, as OMP does.
+  const profile = String(env.OMP_PROFILE ?? env.PI_PROFILE ?? '').trim();
+  if (/^[a-z0-9][a-z0-9._-]{0,63}$/.test(profile) && profile !== 'default'
+      && profile !== '.' && profile !== '..' && !profile.endsWith('.')) {
+    return join(home, configDir, 'profiles', profile, 'agent');
   }
-  return join(homedir(), '.omp', 'agent');
+  const value = String(env.PI_CODING_AGENT_DIR || '').trim();
+  return value ? value : join(home, configDir, 'agent');
 }
 
 export function ompUserLoaderPath(env = process.env) {
@@ -148,6 +158,21 @@ export function ompPluginDir(env = process.env) {
   return join(ompAgentDir(env), 'rsc-plugin');
 }
 
+/** Mirror OMP's XDG-aware *data* root (not its session/state root). */
+export function ompPluginsRoot(env = process.env) {
+  const home = homeOf(env);
+  const configName = env.PI_CONFIG_DIR || '.omp';
+  const profile = String(env.OMP_PROFILE ?? env.PI_PROFILE ?? '').trim();
+  const named = /^[a-z0-9][a-z0-9._-]{0,63}$/.test(profile) && profile !== 'default'
+    && profile !== '.' && profile !== '..' && !profile.endsWith('.');
+  const suffix = named ? ['profiles', profile] : [];
+  const normal = join(home, configName, ...suffix);
+  // An explicitly overridden agent dir only affects the default profile's
+  // agent hooks, not the plugin registry. XDG data is opt-in on migration.
+  const xdg = env.XDG_DATA_HOME ? join(env.XDG_DATA_HOME, 'omp', ...suffix) : null;
+  return join(xdg && existsSync(xdg) ? xdg : normal, 'plugins');
+}
+
 function cliVersion() {
   try { return JSON.parse(readFileSync(join(HERE, '..', 'package.json'), 'utf8')).version || '0.0.0'; } catch { return '0.0.0'; }
 }
@@ -173,8 +198,7 @@ const pluginPackage = (version) => `${JSON.stringify({
 
 /** OMP keeps installed plugins in one machine-level registry, with a lock entry and a symlink. */
 function pluginRegistration(env) {
-  const home = env.HOME || env.USERPROFILE || homedir();
-  const root = join(home, '.omp', 'plugins');
+  const root = ompPluginsRoot(env);
   try {
     const lock = JSON.parse(readFileSync(join(root, 'omp-plugins.lock.json'), 'utf8'));
     const entry = lock?.plugins?.[OMP_PLUGIN_NAME];
@@ -193,8 +217,12 @@ export function wireOmpPlugin(env = process.env, version = cliVersion()) {
   writeFileSync(join(dir, 'package.json'), pluginPackage(version));
   writeFileSync(join(dir, 'index.js'), USER_LOADER_SOURCE);
   const current = pluginRegistration(env);
-  if (current.registered && current.version === version) return { mode: 'wired', path: dir, registered: true };
-  if (String(env.RSC_NO_OMP_PLUGIN || '') === '1') return { mode: 'package', path: dir, registered: false, reason: 'registration-disabled' };
+  // `linked` means OMP already has a package entry pointing at this directory; it will load it
+  // even when this run cannot or must not re-register. The installer uses it to avoid wiring the
+  // legacy hook alongside a plugin OMP still loads.
+  const linked = current.registered;
+  if (linked && current.version === version) return { mode: 'wired', path: dir, registered: true, linked };
+  if (String(env.RSC_NO_OMP_PLUGIN || '') === '1') return { mode: 'package', path: dir, registered: false, linked, reason: 'registration-disabled' };
   const bin = process.platform === 'win32' ? 'omp.exe' : 'omp';
   const result = spawnSync(bin, ['plugin', 'install', dir], {
     encoding: 'utf8', windowsHide: true, timeout: 30000,
@@ -202,11 +230,11 @@ export function wireOmpPlugin(env = process.env, version = cliVersion()) {
   });
   if (result.error || result.status !== 0) {
     return {
-      mode: 'package', path: dir, registered: false, reason: 'plugin-install-failed',
+      mode: 'package', path: dir, registered: false, linked, reason: 'plugin-install-failed',
       message: String(result.stderr || result.stdout || result.error?.message || '').trim().slice(0, 300),
     };
   }
-  return { mode: 'wired', path: dir, registered: true };
+  return { mode: 'wired', path: dir, registered: true, linked: true };
 }
 
 export function inspectOmpPlugin(env = process.env) {

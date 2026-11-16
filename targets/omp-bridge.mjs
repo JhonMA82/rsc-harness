@@ -61,6 +61,11 @@ function guardVerdict(error, stdout, critical = false) {
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
+/** OMP derives its config root from os.homedir(). Git Bash exports a POSIX HOME on Windows, which
+ *  path.join would turn into a drive-relative path; USERPROFILE is the native equivalent there. */
+const homeOf = (env) => process.platform === 'win32'
+  ? (env.USERPROFILE || env.HOME || homedir())
+  : (env.HOME || homedir());
 // A guard is a local Node script; five seconds is generous in normal use. Tests run many of them
 // under a loaded two-core box, so the ceiling is configurable for that case only.
 const GUARD_TIMEOUT = Number(process.env.RSC_OMP_GUARD_TIMEOUT) || 5000;
@@ -77,17 +82,20 @@ export function guardRuntime(execPath = process.execPath, versions = process.ver
 // under `yolo` (its default) read, write and exec are all auto-approved, and an extension's
 // `ctx.ui.approve` comes back 'once' with nobody asked — so an `ask` from a critical guard would
 // be granted silently. `always-ask`, `always-ask-cached` and `write` still confirm exec tools such
-// as bash. No registry (older OMP, a bare install) keeps the old behaviour: `ui.approve` decides.
+// as bash. An absent or unreadable registry cannot prove a prompt was shown, so it is treated the
+// same way: critical guards must block instead of accepting an auto-grant.
 export function hostAutoApproves(registry, scope) {
   try {
     const bash = String(registry?.lookup?.('tools.approval')?.get?.(scope)?.bash ?? '').toLowerCase();
     if (bash === 'prompt') return false;
     if (bash === 'allow') return true;
-    return registry?.lookup?.('tools.approvalMode')?.get?.(scope) === 'yolo';
-  } catch { return false; }
+    const mode = registry?.lookup?.('tools.approvalMode')?.get?.(scope);
+    // An absent/unknown registry is not evidence of a real approval dialog.
+    return mode !== 'always-ask' && mode !== 'always-ask-cached' && mode !== 'write';
+  } catch { return true; }
 }
 
-const HOST_AUTO_APPROVES = 'OMP answers tool approvals itself right now (tools.approvalMode = yolo or tools.approval.bash = allow), so this confirmation never reached you. Run the command yourself, or set tools.approvalMode to always-ask (or tools.approval.bash to prompt) and retry.';
+const HOST_AUTO_APPROVES = 'OMP answers tool approvals itself right now (tools.approvalMode = yolo, tools.approval.bash = allow, or no trustworthy approval registry), so this confirmation never reached you. Run the command yourself, or set tools.approvalMode to always-ask (or tools.approval.bash to prompt) and retry.';
 
 // The plugin page in Settings → Plugins renders one toggle per boolean in the manifest's `settings`
 // map (package.json → omp.settings). OMP stores what the person picks in its plugin registry; the
@@ -100,20 +108,41 @@ export const PLUGIN_SWITCHES = ['guards', 'native', 'memory', 'knowledge', 'lane
  *  overrides it for tests and unusual layouts. */
 export function pluginConfigPath(env = process.env) {
   if (env.RSC_OMP_PLUGIN_CONFIG) return env.RSC_OMP_PLUGIN_CONFIG;
-  const agent = env.PI_CODING_AGENT_DIR;
-  return join(agent ? dirname(resolve(agent)) : join(homedir(), '.omp'), 'plugins', 'omp-plugins.lock.json');
+  const home = homeOf(env);
+  const profile = String(env.OMP_PROFILE ?? env.PI_PROFILE ?? '').trim();
+  const named = /^[a-z0-9][a-z0-9._-]{0,63}$/.test(profile) && profile !== 'default'
+    && profile !== '.' && profile !== '..' && !profile.endsWith('.');
+  const suffix = named ? ['profiles', profile] : [];
+  const normal = join(home, env.PI_CONFIG_DIR || '.omp', ...suffix);
+  const xdg = env.XDG_DATA_HOME ? join(env.XDG_DATA_HOME, 'omp', ...suffix) : null;
+  return join(xdg && existsSync(xdg) ? xdg : normal, 'plugins', 'omp-plugins.lock.json');
 }
 
 /** Pure read of the switch map: an unreadable or absent registry keeps the harness fully on. */
-export function readPluginSwitches(env = process.env) {
+export function readPluginSwitches(env = process.env, cwd = ROOT) {
   const on = Object.fromEntries(PLUGIN_SWITCHES.map((key) => [key, true]));
-  try {
-    const saved = JSON.parse(readFileSync(pluginConfigPath(env), 'utf8'))?.settings?.[PLUGIN_NAME] || {};
-    for (const key of PLUGIN_SWITCHES) {
-      if (saved[key] === false || String(saved[key]).toLowerCase() === 'false') on[key] = false;
-    }
-  } catch { /* no plugin registry here: nothing was turned off */ }
+  const read = (path) => { try { return JSON.parse(readFileSync(path, 'utf8'))?.settings?.[PLUGIN_NAME] || {}; } catch { return {}; } };
+  const global = read(pluginConfigPath(env));
+  // OMP hard-codes `.omp` for project-local files; PI_CONFIG_DIR only moves the machine root.
+  const local = read(join(cwd, '.omp', 'plugin-overrides.json'));
+  const saved = { ...global, ...local };
+  for (const key of PLUGIN_SWITCHES) {
+    if (saved[key] === false || String(saved[key]).toLowerCase() === 'false') on[key] = false;
+  }
   return on;
+}
+
+/** Global or project-level plugin disable is an opt-out even for a committed loader. */
+export function isOmpPluginDisabled(env = process.env, cwd = ROOT) {
+  try {
+    const lock = JSON.parse(readFileSync(pluginConfigPath(env), 'utf8'));
+    if (lock?.plugins?.[PLUGIN_NAME]?.enabled === false) return true;
+  } catch { /* a project loader may run before the plugin is registered */ }
+  try {
+    const override = JSON.parse(readFileSync(join(cwd, '.omp', 'plugin-overrides.json'), 'utf8'));
+    if (Array.isArray(override.disabled) && override.disabled.includes(PLUGIN_NAME)) return true;
+  } catch { /* no project override */ }
+  return false;
 }
 
 // rsc-omp-todo:managed
@@ -279,6 +308,9 @@ export default async function rscOmp(pi) {
     if (loadedApis.has(pi)) return;
     loadedApis.add(pi);
   }
+  // The project loader can run independently of the plugin extension. Respect an
+  // operator-disabled plugin, including the project-level disabled list.
+  if (isOmpPluginDisabled()) return;
   const mods = await loadAll();
   const switches = readPluginSwitches();
   const initialNative = switches.native ? await configureLiveOmpNative(pi) : NO_NATIVE;
@@ -432,8 +464,9 @@ export default async function rscOmp(pi) {
   pi.on('before_subagent_spawn', (event, ctx) => {
     if (!isMain(ctx)) return;
     const agentName = typeof event?.agent === 'string' ? event.agent : (event?.agent?.name || '');
-    if (switches.native && nativeModeState(ctx, state.nativeModes)?.plan === 'active' && agentName === 'developer')
-      return { block: true, reason: 'rsc: an implementation worker cannot start in native OMP Plan mode.' };
+    if (switches.native && nativeModeState(ctx, state.nativeModes)?.plan === 'active'
+        && (agentName === 'developer' || process.env.RSC_OMP_STRICT_PLAN === '1'))
+      return { block: true, reason: 'rsc: an implementation subagent (or any subagent under RSC_OMP_STRICT_PLAN=1) cannot start during Plan mode.' };
   });
 
   pi.on('before_agent_start', async (event, ctx) => {
@@ -497,6 +530,15 @@ export default async function rscOmp(pi) {
   // Guards run in every session: a subagent running `rm -rf` is still destructive.
   pi.on('tool_call', async (event, ctx) => {
     try {
+      if (switches.native && nativeModeState(ctx, state.nativeModes)?.plan === 'active'
+          && ['bash', 'eval', 'write', 'edit'].includes(event?.toolName)) {
+        return { block: true, reason: `rsc: ${event.toolName} cannot mutate the workspace while OMP Plan mode is active. Exit Plan and obtain the accepted rsc approval first.` };
+      }
+      // Strict execution is opt-in: arbitrary JS eval can spawn shell commands
+      // outside bash guards. Never pretend static inspection of eval is secure.
+      if (process.env.RSC_OMP_STRICT_EXEC === '1' && event?.toolName === 'eval') {
+        return { block: true, reason: 'rsc strict execution: eval is blocked because its subprocesses bypass rsc bash guards. Run a specific audited command through bash or unset RSC_OMP_STRICT_EXEC.' };
+      }
       if (!switches.guards) return;
       if (event?.toolName !== 'bash') return;
       const command = event?.input?.command;
@@ -536,7 +578,10 @@ export default async function rscOmp(pi) {
         }
       }
     } catch {
-      // OMP treats a throw here as a block. Fail-open is the contract.
+      // If an unexpected runtime error occurs, do not silently permit a bash
+      // command that may be destructive. Other tools retain their native policy.
+      if (switches.guards && event?.toolName === 'bash')
+        return { block: true, reason: 'rsc: bash guard evaluation failed; command denied. Inspect rsc doctor and the bridge logs.' };
       return;
     }
   });

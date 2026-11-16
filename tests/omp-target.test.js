@@ -27,6 +27,11 @@ import {
 // `omp` in omp08; never let it reach the real registry from the other tests.
 process.env.PI_CODING_AGENT_DIR = mkdtempSync(join(tmpdir(), 'rsc-omp-agent-'));
 process.env.RSC_NO_OMP_PLUGIN = '1';
+// The bridge reads the machine plugin registry at startup; a developer's Settings → Plugins
+// toggles must not change these results.
+process.env.RSC_OMP_PLUGIN_CONFIG = join(mkdtempSync(join(tmpdir(), 'rsc-omp-plugin-config-')), 'none.json');
+delete process.env.RSC_OMP_STRICT_PLAN;
+delete process.env.RSC_OMP_STRICT_EXEC;
 // A full-suite run on a two-core box can starve the four guard child processes past the production
 // five-second ceiling. The guards are local scripts, so the test gives them room instead of flaking.
 process.env.RSC_OMP_GUARD_TIMEOUT = '15000';
@@ -276,6 +281,18 @@ test('omp06 · a hand-written machine-level resolver is never replaced', () => {
 
 test('omp07 · the machine-level resolver loads the bridge from a subdirectory, and not twice at the root', async () => {
   const cwd = project();
+  const home = mkdtempSync(join(tmpdir(), 'rsc-omp-resolver-home-'));
+  const previous = {
+    HOME: process.env.HOME,
+    PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
+    RSC_NO_OMP_PLUGIN: process.env.RSC_NO_OMP_PLUGIN,
+  };
+  Object.assign(process.env, {
+    HOME: home,
+    PI_CODING_AGENT_DIR: join(home, '.omp', 'agent'),
+    // Exercise the resolver fallback deterministically; the registered-plugin path has its own test.
+    RSC_NO_OMP_PLUGIN: '1',
+  });
   try {
     await applyInstall({ skillIds: ['suggest'], target: 'omp', cwd });
     const userLoader = ompUserLoaderPath();
@@ -299,7 +316,11 @@ test('omp07 · the machine-level resolver loads the bridge from a subdirectory, 
     assert.notEqual(report.ompPlugin.mode, 'absent', 'doctor names the OMP plugin package');
     assert.ok(existsSync(join(ompPluginDir(), 'package.json')));
   } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
     rmSync(cwd, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
   }
 });
 
@@ -465,7 +486,7 @@ test('omp13 · a critical ask blocks when the host auto-approves it', async () =
     assert.equal(hostAutoApproves(fakeRegistry('write', 'allow'), {}), true);
     assert.equal(hostAutoApproves(fakeRegistry('always-ask', 'prompt'), {}), false);
     assert.equal(hostAutoApproves(fakeRegistry('yolo', 'prompt'), {}), false, 'a per-tool prompt overrides yolo');
-    assert.equal(hostAutoApproves(null, {}), false, 'without a registry the ui keeps deciding');
+    assert.equal(hostAutoApproves(null, {}), true, 'without a registry an auto-grant cannot prove human approval');
 
     // yolo: OMP auto-approves exec, so `ui.approve` says yes without asking anyone. The critical
     // guard must block instead of pretending the person confirmed.

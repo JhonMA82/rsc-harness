@@ -214,9 +214,11 @@ guaranteed business outcome.
 
 ### Hooks and guards
 
-In Claude Code and Oh My Pi, hooks enforce what instructions only ask for: the lane decisor on every
-turn, a refusal before a commit on a closed `main`, a confirmation before destructive commands, and a
-nudge to write the feature document before the first code edit. Every refusal says how to carry on.
+Claude Code and Oh My Pi install runtime hooks for selected guard operations. On Oh My Pi,
+RSC intercepts `bash`, and its Plan hook blocks direct `bash`, `write`, `edit` and `eval` calls;
+OMP native `/commit`, JavaScript `eval`, third-party tools and a person's shell are not intrinsically
+sandboxed by RSC. Enable `RSC_OMP_STRICT_EXEC=1` to deny model `eval` calls while keeping native
+`task`, `todo` and `ask`. For actual isolation, use OMP's own approval policy and OS-level sandbox.
 The rules only see what the **agent** runs; a person committing in their own terminal is never
 touched.
 
@@ -387,13 +389,18 @@ The wizard asks which ones; `--target a,b` does it non-interactively.
 > working directory**, so rsc also installs a machine-level resolver at
 > `~/.omp/agent/hooks/pre/rsc.js` (or `$PI_CODING_AGENT_DIR/hooks/pre/rsc.js`) that finds the nearest
 > project and loads its bridge when OMP is started in a subdirectory. It does nothing in a project
-> that has not committed rsc's own loader; delete that file to turn it off. The same resolver travels
-> as the `rsc-harness` OMP plugin, so `omp plugin list` shows the integration as installed.
+> that has not committed rsc's own loader. The same resolver is available as the `rsc-harness` OMP
+> plugin. When registered, the plugin supersedes the managed user-level hook to avoid registering
+> every lifecycle handler twice; a manually written hook is never deleted. If the plugin itself is
+> disabled, the user-level fallback stays absent until the registration is removed and `rsc sync`
+> runs with `RSC_NO_OMP_PLUGIN=1`. Plugin switches are read at bridge start; restart OMP after
+> changing Settings → Plugins.
 >
 > **Native todo panel.** OMP's TUI has a live todo list, fed only by the model calling its native
 > `todo` tool. rsc writes a short section into `.omp/AGENTS.md` so FTD and ASDD runs mirror their
-> checklist or `## Tasks` table into that tool, and the bridge sets `todo.eager` to `always` when you
-> have not configured it yourself. `.omp/RULES.md` carries the hard rules that must survive
+> checklist or `## Tasks` table into that tool. `todo.eager=always` is opt-in via
+> `RSC_OMP_TODO_EAGER=1`; otherwise Answer-lane questions do not force a todo list.
+> `.omp/RULES.md` carries the hard rules that must survive
 > compaction and reach task subagents, which OMP deliberately does not give `AGENTS.md`. Opt out
 > with `.rsc/.no-omp-todo` or `RSC_NO_OMP_TODO=1`; the Markdown artifacts remain the durable
 > record. For a clearer live view, `omp config set display.hideToolActivity false` and

@@ -45,25 +45,19 @@ export function configureOmpNative(pi, lookup) {
     } catch (error) { result.warnings.push(`${key}: ${error?.message || String(error)}`); }
   }
 
-  // OMP tools.approval is ONE map-valued setting. Merge without removing any existing rules.
-  // A specific eval policy (allow, deny or prompt) is the operator's decision and wins.
+  // OMP tools.approval is ONE map-valued setting, and rsc does not write it: a per-tool policy is
+  // the operator's decision. Forcing `eval: prompt` used to stop every eval cell for approval in
+  // every approval mode, and this harness is meant to work without that friction. An explicit
+  // `allow` still warns, because eval executes outside the bash guards.
   try {
     const handle = lookup('tools.approval');
-    if (handle && typeof handle.override === 'function' && typeof handle.get === 'function') {
-      const current = get(handle, scope);
-      if (current && typeof current === 'object' && !Array.isArray(current)) {
-        if (Object.hasOwn(current, 'eval')) {
-          if (!wasAppliedByBridge(scope, 'tools.approval.eval')) result.preserved.push('tools.approval.eval');
-          if (String(current.eval).toLowerCase() === 'allow')
-            result.warnings.push('tools.approval.eval=allow: eval may execute shell/git outside bash guards.');
-        } else {
-          handle.override(scope, { ...current, eval: 'prompt' });
-          markAppliedByBridge(scope, 'tools.approval.eval');
-          result.applied.push('tools.approval.eval');
-        }
-      }
+    const current = handle && typeof handle.get === 'function' ? get(handle, scope) : undefined;
+    if (current && typeof current === 'object' && !Array.isArray(current) && Object.hasOwn(current, 'eval')) {
+      result.preserved.push('tools.approval.eval');
+      if (String(current.eval).toLowerCase() === 'allow')
+        result.warnings.push('tools.approval.eval=allow: eval may execute shell/git outside bash guards.');
     }
-  } catch (error) { result.warnings.push(`tools.approval.eval: ${error?.message || String(error)}`); }
+  } catch (error) { result.warnings.push(`tools.approval: ${error?.message || String(error)}`); }
 
   // OMP v18.20.2: off | capped | backoff. 'capped' sends at most two reminders.
   // Reassert only as an unset default, never overwrite user configuration.

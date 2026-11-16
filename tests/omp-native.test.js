@@ -32,7 +32,8 @@ test('Native OMP defaults enable stepped workers and suggest-only concurrency, n
   assert.equal(status.effective['task.steps'], true);
   assert.equal(status.effective['task.autoParallel'], 'suggest');
   assert.equal(r.values['commit.enabled'], false);
-  assert.deepEqual(r.values['tools.approval'],{bash:'prompt',eval:'prompt'});
+  assert.deepEqual(r.values['tools.approval'],{bash:'prompt'});
+  assert.ok(!r.calls.some(([key])=>key==='tools.approval'),'rsc never writes a per-tool policy');
   assert.equal(r.values['todo.midRunNudges'],'capped');
   assert.ok(status.applied.includes('task.steps'));
   assert.ok(!r.calls.some(([key])=>key==='todo.eager'));

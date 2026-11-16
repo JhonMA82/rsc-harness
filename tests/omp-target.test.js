@@ -17,7 +17,7 @@ import {
   OMP_LOADER, OMP_USER_LOADER_MARKER, OMP_PLUGIN_NAME, OMP_TODO_MARKER, inspectOmpBridge, inspectOmpPlugin,
   inspectOmpTodo, ompAgentDir, ompBridgeManagedPaths, ompPluginDir, ompUserLoaderPath, wireOmpPlugin, wireOmpUserLoader,
 } from '../targets/omp-bridge.js';
-import { applyOmpTodoDefault, guardRuntime, pinOmpTodoDefault } from '../targets/omp-bridge.mjs';
+import { applyOmpTodoDefault, guardRuntime, hostAutoApproves, pinOmpTodoDefault } from '../targets/omp-bridge.mjs';
 import {
   inspectOmpRules, ompRulesPath, unwireOmpRules, wireOmpRules,
 } from '../targets/omp-rules.js';
@@ -398,6 +398,95 @@ printf '{"plugins":{"${OMP_PLUGIN_NAME}":{"version":"0.0.0","enabled":true}},"se
     assert.equal(inspectOmpPlugin(env).mode, 'wired');
   } finally {
     rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('omp13 · a critical ask blocks when the host auto-approves it', async () => {
+  const previous = process.env.RSC_NO_UPDATE_CHECK;
+  process.env.RSC_NO_UPDATE_CHECK = '1';
+  // The bridge imports OMP's settings registry by bare specifier, so a project-local node_modules
+  // decides what the host reports about its own approval policy.
+  const writeRegistry = (cwd, mode) => {
+    const dir = join(cwd, 'node_modules', '@oh-my-pi', 'pi-coding-agent');
+    mkdirSync(join(dir, 'config'), { recursive: true });
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({
+      name: '@oh-my-pi/pi-coding-agent',
+      version: '0.0.0',
+      type: 'module',
+      exports: { './config/registry': './config/registry.js' },
+    }));
+    writeFileSync(join(dir, 'config', 'registry.js'), [
+      `const values = { "tools.approvalMode": ${JSON.stringify(mode)}, "tools.approval": {} };`,
+      'const handle = (id) => ({',
+      '  get: () => values[id],',
+      '  isConfigured: () => id in values,',
+      '  override: (scope, value) => { values[id] = value; },',
+      '});',
+      'export function lookup(id) { return handle(id); }',
+    ].join('\n'));
+  };
+  const fakeRegistry = (mode, bash) => ({
+    lookup: (id) => ({
+      get: () => id === 'tools.approvalMode' ? mode : id === 'tools.approval' ? { bash } : undefined,
+    }),
+  });
+  const approveOnce = async () => 'once';
+  // A technical profile turns the wipe rule into an `ask`; a non-technical one denies outright and
+  // would never exercise the host's approval at all.
+  const technicalProfile = (cwd) => {
+    mkdirSync(join(cwd, '02-DOCS', 'wiki', 'harness'), { recursive: true });
+    writeFileSync(join(cwd, '02-DOCS', 'wiki', 'harness', 'user-profile.md'), '---\ntechnical_level: technical\n---\n');
+  };
+  const contextAt = (cwd) => ({
+    cwd,
+    mode: 'tui',
+    agent: { kind: 'main' },
+    hasUI: true,
+    ui: { approve: approveOnce },
+    sessionManager: { getSessionId: () => 'omp-main', getSessionFile: () => null },
+  });
+  const handlersFor = async (cwd) => {
+    const { default: factory } = await import(pathToFileURL(join(cwd, '.rsc', 'omp-bridge.mjs')).href);
+    const handlers = new Map();
+    await factory({ on(name, fn) { handlers.set(name, fn); }, pi: { settings: {} } });
+    return handlers;
+  };
+  const cwd = project();
+  const alwaysAsk = project();
+  try {
+    assert.equal(hostAutoApproves(fakeRegistry('yolo'), {}), true);
+    assert.equal(hostAutoApproves(fakeRegistry('always-ask'), {}), false);
+    assert.equal(hostAutoApproves(fakeRegistry('always-ask-cached'), {}), false);
+    assert.equal(hostAutoApproves(fakeRegistry('write'), {}), false);
+    assert.equal(hostAutoApproves(fakeRegistry('write', 'allow'), {}), true);
+    assert.equal(hostAutoApproves(fakeRegistry('always-ask', 'prompt'), {}), false);
+    assert.equal(hostAutoApproves(fakeRegistry('yolo', 'prompt'), {}), false, 'a per-tool prompt overrides yolo');
+    assert.equal(hostAutoApproves(null, {}), false, 'without a registry the ui keeps deciding');
+
+    // yolo: OMP auto-approves exec, so `ui.approve` says yes without asking anyone. The critical
+    // guard must block instead of pretending the person confirmed.
+    await applyInstall({ skillIds: ['suggest'], target: 'omp', cwd });
+    technicalProfile(cwd);
+    writeRegistry(cwd, 'yolo');
+    const handlers = await handlersFor(cwd);
+    const blocked = await handlers.get('tool_call')({ toolName: 'bash', input: { command: 'rm -rf /' } }, contextAt(cwd));
+    assert.equal(blocked?.block, true, 'the wipe is blocked even though ui.approve returned once');
+    assert.match(blocked.reason, /recursively deletes/);
+    assert.match(blocked.reason, /tools\.approvalMode = yolo/, 'the refusal says why no prompt reached the person');
+    assert.equal(await handlers.get('tool_call')({ toolName: 'bash', input: { command: 'echo hola' } }, contextAt(cwd)), undefined,
+      'a benign command is unaffected');
+
+    // The same ask with a mode that does prompt exec keeps trusting the host's answer.
+    await applyInstall({ skillIds: ['suggest'], target: 'omp', cwd: alwaysAsk });
+    technicalProfile(alwaysAsk);
+    writeRegistry(alwaysAsk, 'always-ask');
+    const prompting = await handlersFor(alwaysAsk);
+    assert.equal(await prompting.get('tool_call')({ toolName: 'bash', input: { command: 'rm -rf /' } }, contextAt(alwaysAsk)), undefined,
+      'a real host prompt is still honored');
+  } finally {
+    if (previous === undefined) delete process.env.RSC_NO_UPDATE_CHECK; else process.env.RSC_NO_UPDATE_CHECK = previous;
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(alwaysAsk, { recursive: true, force: true });
   }
 });
 

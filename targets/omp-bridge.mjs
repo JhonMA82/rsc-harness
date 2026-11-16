@@ -72,6 +72,22 @@ export function guardRuntime(execPath = process.execPath, versions = process.ver
   return !versions.bun && /^node(?:\.exe)?$/i.test(basename(execPath)) ? execPath : 'node';
 }
 
+// Whether the host answers its own approval prompts. OMP resolves the policy before any prompt:
+// under `yolo` (its default) read, write and exec are all auto-approved, and an extension's
+// `ctx.ui.approve` comes back 'once' with nobody asked — so an `ask` from a critical guard would
+// be granted silently. `always-ask`, `always-ask-cached` and `write` still confirm exec tools such
+// as bash. No registry (older OMP, a bare install) keeps the old behaviour: `ui.approve` decides.
+export function hostAutoApproves(registry, scope) {
+  try {
+    const bash = String(registry?.lookup?.('tools.approval')?.get?.(scope)?.bash ?? '').toLowerCase();
+    if (bash === 'prompt') return false;
+    if (bash === 'allow') return true;
+    return registry?.lookup?.('tools.approvalMode')?.get?.(scope) === 'yolo';
+  } catch { return false; }
+}
+
+const HOST_AUTO_APPROVES = 'OMP answers tool approvals itself right now (tools.approvalMode = yolo or tools.approval.bash = allow), so this confirmation never reached you. Run the command yourself, or set tools.approvalMode to always-ask (or tools.approval.bash to prompt) and retry.';
+
 // rsc-omp-todo:managed
 //
 // OMP's live todo panel is fed by the model calling its native `todo` tool; an extension cannot
@@ -133,7 +149,10 @@ function runGuard(script, root, payload, cwd, critical = false) {
         encoding: 'utf8',
         maxBuffer: 1 << 20,
         env: { ...process.env, RSC_OMP: '1' },
-      }, (error, stdout) => { done(guardVerdict(error, stdout, critical)); });
+      }, (error, stdout) => {
+        const verdict = guardVerdict(error, stdout, critical);
+        done(verdict ? { ...verdict, critical } : verdict);
+      });
       child.stdin.on('error', () => { /* the child may exit before reading */ });
       child.stdin.end(payload);
     } catch (error) {
@@ -459,6 +478,11 @@ export default async function rscOmp(pi) {
         if (!verdict) continue;
         if (verdict.decision === 'deny') return { block: true, reason: verdict.reason };
         if (verdict.decision === 'ask') {
+          // The host's answer is only evidence when the host asks. Under yolo (or a bash=allow
+          // policy) `ui.approve` resolves without a person, so a critical guard blocks instead.
+          if (verdict.critical && hostAutoApproves(await loadSettingsRegistry(), pi?.pi?.settings)) {
+            return { block: true, reason: `${verdict.reason}\n\n${HOST_AUTO_APPROVES}` };
+          }
           if (await askPerson(ctx, verdict.reason)) continue;
           return {
             block: true,

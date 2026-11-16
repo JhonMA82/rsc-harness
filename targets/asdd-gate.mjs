@@ -176,9 +176,18 @@ function resolvePushRepository(dir, options) {
 /** The shell expands these before git sees them; the scanner audits the expanded path, never a
  *  literal `~` directory that does not exist (and that Git then treats as no repository). */
 function expandHome(value) {
-  return String(value)
-    .replace(/^\$(?:\{HOME\}|HOME)(?=[\\/]|$)/, homedir())
-    .replace(/^~(?=[\\/]|$)/, homedir());
+  const text = String(value);
+  if (!text.startsWith('$') && !text.startsWith('~')) return text;
+  let home;
+  try {
+    home = homedir();
+  } catch {
+    return text;
+  }
+  // A function replacement keeps `$&`, `$'` or `$$` in an unusual home path literal.
+  return text
+    .replace(/^\$(?:\{HOME\}|HOME)(?=[\\/]|$)/, () => home)
+    .replace(/^~(?=[\\/]|$)/, () => home);
 }
 export function reposWithPush(command, cwd, { onUnresolved = () => {} } = {}) {
   const found = new Set();

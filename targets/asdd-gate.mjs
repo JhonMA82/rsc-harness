@@ -15,6 +15,7 @@
 // Fail-open on any environment problem; opt out per project with `.rsc/.no-asdd-gate`.
 import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { join, resolve, relative } from 'node:path';
+import { homedir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import {
   expand,
@@ -29,6 +30,7 @@ import {
   changeDetails,
   matchPolicyRules,
   policyPattern,
+  policyRoot,
 } from './risk-policy.mjs';
 
 // Options that take a value must swallow it, or `gh -R owner/repo pr create` reads `owner/repo` as
@@ -171,6 +173,13 @@ function resolvePushRepository(dir, options) {
 
 // Resolve only commands we understand. Shell aliases/functions and arbitrary scripts cannot be
 // inferred; callers can use the explicit branch-check CLI for those integrations.
+/** The shell expands these before git sees them; the scanner audits the expanded path, never a
+ *  literal `~` directory that does not exist (and that Git then treats as no repository). */
+function expandHome(value) {
+  return String(value)
+    .replace(/^\$(?:\{HOME\}|HOME)(?=[\\/]|$)/, homedir())
+    .replace(/^~(?=[\\/]|$)/, homedir());
+}
 export function reposWithPush(command, cwd, { onUnresolved = () => {} } = {}) {
   const found = new Set();
   function scan(text, start, depth = 0) {
@@ -192,9 +201,10 @@ export function reposWithPush(command, cwd, { onUnresolved = () => {} } = {}) {
         const path = tokens.filter(
           (t) => !/^-(?:literalpath|path)$/i.test(t),
         )[1];
-        if (path && !/[${}`]/.test(path)) {
+        const expanded = path ? expandHome(path) : '';
+        if (expanded && !/[${}`]/.test(expanded)) {
           if (name === 'pushd') stack.push(dir);
-          dir = resolve(dir, path);
+          dir = resolve(dir, expanded);
         }
         continue;
       }
@@ -231,7 +241,15 @@ export function reposWithPush(command, cwd, { onUnresolved = () => {} } = {}) {
       if (isGit && tokens[commandIndex] === 'push') {
         // Let Git resolve all supported global selectors, in their actual order. Reconstructing
         // only -C would silently ignore --git-dir/--work-tree and inspect the parent repository.
-        const options = tokens.slice(1, commandIndex);
+        const options = tokens
+          .slice(1, commandIndex)
+          .map((token, index, all) => {
+            const equal = /^(--(?:git-dir|work-tree))=(.*)$/.exec(token);
+            if (equal) return `${equal[1]}=${expandHome(equal[2])}`;
+            return index > 0 && ['-C', '--git-dir', '--work-tree'].includes(all[index - 1])
+              ? expandHome(token)
+              : token;
+          });
         const { repo, error } = resolvePushRepository(dir, options);
         if (repo) found.add(repo);
         else if (error) onUnresolved(error);
@@ -346,7 +364,7 @@ export function branchCheck(
     return null;
   const local = sello.readEffectiveConfig(root);
   const policy = readPolicy(repo, {
-    workspace: root,
+    workspace: policyRoot(root),
     localConfig: local,
     tip: tip || 'HEAD',
   });

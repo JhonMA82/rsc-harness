@@ -198,10 +198,15 @@ export function readPolicy(
     risk: {
       ...(policy.risk || {}),
       ...(repoCfg.risk || {}),
-      rules: [...(policy.rules || []), ...(repoCfg.rules || [])],
+      rules: [
+        ...(policy.risk?.rules || []),
+        ...(policy.rules || []),
+        ...(repoCfg.risk?.rules || []),
+        ...(repoCfg.rules || []),
+      ],
     },
     repo: rel,
-    testRepo: (policy.testRepos || []).includes(rel),
+    testRepo: [...(policy.testRepos || []), ...(repoCfg.testRepos || [])].includes(rel),
     policySource: source,
     policyError: error,
   };
@@ -269,7 +274,10 @@ export function policyRules(cfg) {
   });
 }
 const linesMatch = (lines, p) =>
-  (lines || []).some((l) => l.length <= 2000 && policyPattern(p).test(l));
+  (lines || []).some((l) => {
+    const line = l.replace(/\r$/, '');
+    return line.length <= 2000 && policyPattern(p).test(line);
+  });
 export function ruleApplies(r, path, detail, cfg) {
   if (r.repos && !r.repos.includes(cfg?.repo || '.')) return false;
   if (r.productionOnly && cfg?.testRepo) return false;

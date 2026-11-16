@@ -25,7 +25,7 @@ const BRIDGE = 'omp-bridge.mjs';
 const COPY = ['copy-guard.mjs', 'copy-rules.mjs'];
 const DANGER = ['danger-guard.mjs', 'shell-unwrap.mjs'];
 const CODE = [
-  'shell-unwrap.mjs',
+  'shell-unwrap.mjs', 'risk-policy.mjs',
   'ship-guard.mjs', 'branch-guard.mjs', 'gitmoji-guard.mjs',
   'sello.mjs', 'asdd-gate.mjs', 'spec-completeness.mjs', 'trunk-policy.mjs',
 ];

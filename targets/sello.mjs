@@ -361,7 +361,7 @@ export function computeCandidate(rawRoot, cfg = null) {
   if (!base) return null;
 
   const names = new Set();
-  for (const n of nulList(git(root, 'diff', '--name-only', '-z', base))) names.add(n);
+  for (const n of nulList(git(root, 'diff', '--name-only', '--no-renames', '-z', base))) names.add(n);
   // Untracked nested worktrees are other checkouts; committed paths under them are part of the change.
   for (const n of nulList(git(root, 'ls-files', '--others', '--exclude-standard', '-z'))) if (!NESTED_WORKTREES.test(n)) names.add(n);
   for (const p of SELLO_STATE_PATHS) names.delete(p);
@@ -381,7 +381,7 @@ export function computeCandidate(rawRoot, cfg = null) {
       files[name] = 'S'; // socket/fifo/device — never read, but its presence counts
     }
   }
-  for (const line of (git(root, 'diff', '--numstat', base) || '').split('\n')) {
+  for (const line of (git(root, 'diff', '--numstat', '--no-renames', base) || '').split('\n')) {
     const m = /^(\d+|-)\t(\d+|-)\t(.+)$/.exec(line);
     if (m) numstat[m[3]] = (m[1] === '-' ? 0 : Number(m[1])) + (m[2] === '-' ? 0 : Number(m[2]));
   }

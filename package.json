@@ -21,8 +21,8 @@
     "routing:audit": "node scripts/routing-audit.js",
     "design:upstream": "node scripts/design-upstream.js",
     "originality:check": "node scripts/originality-check.js",
-    "test": "node --test",
-    "coverage": "c8 --reporter=text node --test",
+    "test": "node scripts/run-tests.mjs",
+    "coverage": "c8 --reporter=text node scripts/run-tests.mjs",
     "version": "npm run manifest && git add manifest.json",
     "prepublishOnly": "npm run manifest && npm run validate && npm run drift:check && npm run originality:check"
   },

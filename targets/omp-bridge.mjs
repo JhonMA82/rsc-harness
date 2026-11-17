@@ -73,9 +73,21 @@ const GUARD_TIMEOUT = Number(process.env.RSC_OMP_GUARD_TIMEOUT) || 5000;
 // A guard is plain Node, and the host is not always Node: OMP ships as a Bun-compiled `omp` binary,
 // so its `process.execPath` starts a nested session instead of running the script — every critical
 // guard then times out into a deny. Same rule as knowledge-sync's workerRuntime: only a real Node
-// executable may run a guard, and a Bun host always falls back to the `node` on PATH.
-export function guardRuntime(execPath = process.execPath, versions = process.versions) {
-  return !versions.bun && /^node(?:\.exe)?$/i.test(String(execPath).split(/[\\/]/).pop()) ? execPath : 'node';
+// executable may run a guard. The Pi/OMP installer keeps its own Node for the `pi` launcher, but
+// the `omp` binary does not put it on PATH; on a machine with no system Node that turned every
+// command into `rsc critical guard crashed/timed out`. RSC_OMP_NODE overrides both candidates; a
+// value that does not exist is ignored so a typo cannot brick every guard.
+export function bundledNodePath(env = process.env) {
+  const data = String(env.XDG_DATA_HOME || '').trim() || join(homeOf(env), '.local', 'share');
+  return join(data, 'pi-node', 'current', 'bin', process.platform === 'win32' ? 'node.exe' : 'node');
+}
+
+export function guardRuntime(execPath = process.execPath, versions = process.versions, env = process.env) {
+  if (!versions.bun && /^node(?:\.exe)?$/i.test(String(execPath).split(/[\\/]/).pop())) return execPath;
+  const override = String(env.RSC_OMP_NODE || '').trim();
+  if (override && existsSync(override)) return override;
+  const bundled = bundledNodePath(env);
+  return existsSync(bundled) ? bundled : 'node';
 }
 
 // Whether the host answers its own approval prompts. OMP resolves the policy before any prompt:

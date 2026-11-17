@@ -552,16 +552,33 @@ test('omp12 · guards run under Node when the OMP host binary is not Node', asyn
   const cwd = project();
   const node = process.execPath;
   const bun = Object.getOwnPropertyDescriptor(process.versions, 'bun');
+  const previousNodeEnv = process.env.RSC_OMP_NODE;
+  const runtimeDir = mkdtempSync(join(tmpdir(), 'rsc-omp-node-'));
+  const exe = process.platform === 'win32' ? 'node.exe' : 'node';
+  const managed = join(runtimeDir, 'pi-node', 'current', 'bin', exe);
+  const override = join(runtimeDir, 'custom-node');
+  const bareEnv = { HOME: join(runtimeDir, 'no-home') };
+  mkdirSync(dirname(managed), { recursive: true });
+  writeFileSync(managed, '');
+  writeFileSync(override, '');
   try {
     await applyInstall({ skillIds: ['suggest'], target: 'omp', cwd });
     // OMP ships as a Bun-compiled `omp` binary: inside its extension host `process.execPath` is that
     // binary, and `omp <script>` starts a nested session instead of the guard. The guard then dies
     // by timeout and every critical guard denies the command. A guard is plain Node, so the host
     // may supply the path only when the host itself is Node.
-    assert.equal(guardRuntime('/opt/omp/bin/omp', { bun: '1.2.0' }), 'node');
-    assert.equal(guardRuntime('/opt/omp/bin/omp', {}), 'node');
-    assert.equal(guardRuntime(node, { bun: '1.2.0' }), 'node', 'a Bun host never trusts its execPath');
-    assert.equal(guardRuntime(node, {}), node);
+    assert.equal(guardRuntime('/opt/omp/bin/omp', { bun: '1.2.0' }, bareEnv), 'node');
+    assert.equal(guardRuntime('/opt/omp/bin/omp', {}, bareEnv), 'node');
+    assert.equal(guardRuntime(node, { bun: '1.2.0' }, bareEnv), 'node', 'a Bun host never trusts its execPath');
+    assert.equal(guardRuntime(node, {}, bareEnv), node);
+    // The `pi` launcher puts this same Node on PATH for its own children; the `omp` binary does not.
+    assert.equal(guardRuntime('/opt/omp/bin/omp', { bun: '1.2.0' }, { ...bareEnv, XDG_DATA_HOME: runtimeDir }), managed,
+      'finds the Node the Pi installer manages');
+    assert.equal(guardRuntime('/opt/omp/bin/omp', { bun: '1.2.0' }, { ...bareEnv, XDG_DATA_HOME: runtimeDir, RSC_OMP_NODE: override }), override,
+      'an explicit override wins over the managed runtime');
+    assert.equal(guardRuntime('/opt/omp/bin/omp', { bun: '1.2.0' }, { ...bareEnv, XDG_DATA_HOME: runtimeDir, RSC_OMP_NODE: join(runtimeDir, 'missing') }), managed,
+      'a missing override falls through instead of bricking every guard');
+    process.env.RSC_OMP_NODE = node;
 
     const { default: factory } = await import(pathToFileURL(join(cwd, '.rsc', 'omp-bridge.mjs')).href);
     const handlers = new Map();
@@ -585,7 +602,9 @@ test('omp12 · guards run under Node when the OMP host binary is not Node', asyn
   } finally {
     Object.defineProperty(process, 'execPath', { value: node, configurable: true });
     if (bun) Object.defineProperty(process.versions, 'bun', bun); else delete process.versions.bun;
+    if (previousNodeEnv === undefined) delete process.env.RSC_OMP_NODE; else process.env.RSC_OMP_NODE = previousNodeEnv;
     rmSync(cwd, { recursive: true, force: true });
+    rmSync(runtimeDir, { recursive: true, force: true });
   }
 });
 

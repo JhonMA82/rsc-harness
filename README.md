@@ -117,7 +117,20 @@ Everything stays **in the project**. The real skill files are written once to `.
 each assistant gets a symlink back to that shared base, so picking several duplicates nothing. Skills
 load progressively: only their description is paid for until a task needs them.
 
+**Using the OMP fork.** Run `node /path/to/fork/scripts/rsc.js` from the project, or install a tarball
+built with `npm pack` from the reviewed fork commit. The public npm package `@ericrisco/rsc` is the
+upstream distribution. For example, sync with `node /path/to/fork/scripts/rsc.js sync --target omp`.
+Projects declaring OMP keep their installed distribution by default, including projects that also
+declare another assistant. `RSC_OMP_ALLOW_UPSTREAM_AUTO_UPDATE=1` opts those projects into upstream
+updates.
+
 Prefer a short `rsc` command? `npm install -g @ericrisco/rsc`.
+
+When an executable `rsc` is already on PATH, install and sync write operational skill and
+command instructions using that installed CLI. This also applies to unversioned commands
+suggested by hooks. Explicit versions such as `@4.1.1` and `@latest` keep their meaning.
+No execution permission is added for this choice. If the CLI is removed, run sync using the
+version declared in `.rsc.json` to restore the `npx` instructions.
 
 > **Run it inside the project you are equipping, not inside a clone of this repo.** The catalog's own
 > `package.json` is named `@ericrisco/rsc`, so `npx @ericrisco/rsc` from within a clone resolves to
@@ -214,13 +227,29 @@ guaranteed business outcome.
 
 ### Hooks and guards
 
-Claude Code and Oh My Pi install runtime hooks for selected guard operations. On Oh My Pi,
-RSC intercepts `bash`, and its Plan hook blocks direct `bash`, `write`, `edit` and `eval` calls;
-OMP native `/commit`, JavaScript `eval`, third-party tools and a person's shell are not intrinsically
-sandboxed by RSC. Enable `RSC_OMP_STRICT_EXEC=1` to deny model `eval` calls while keeping native
-`task`, `todo` and `ask`. For actual isolation, use OMP's own approval policy and OS-level sandbox.
-The rules only see what the **agent** runs; a person committing in their own terminal is never
-touched.
+Claude Code and Oh My Pi install runtime hooks for selected guard operations. The following
+coverage is based on the [OMP 19.0.0 extension runtime](https://github.com/can1357/oh-my-pi/tree/v19.0.0/packages/coding-agent/src).
+
+| OMP execution surface | Enforcement |
+| --- | --- |
+| Model `bash` through the tool registry | RSC runs the selected guards before execution. It resolves the tool working directory separately from the harness policy and Git checkout. Recognized push, PR creation, PR merge and Git merge commands require one interactive approval in the main session when the Ship policy is enabled. |
+| Model `write`, `edit`, `apply_patch`, and move or delete operations through those tools | RSC blocks registry calls in active Plan. OMP also has native Plan checks for edit and write paths. Outside Plan, these tools use OMP's own policy. |
+| Model `eval` through the registry | RSC blocks it in active Plan and under `RSC_OMP_STRICT_EXEC=1`. Outside those cases, OMP's `tools.approval.eval` controls the call. The Bash guards have no visibility into subprocesses launched inside an eval cell. |
+| MCP and extension tools through the registry | RSC blocks them in active Plan, checking tool provenance where OMP exposes it. Outside Plan, approval and side effects depend on OMP and the tool provider. |
+| Native `task` subagents | OMP 19.0.0 narrows Plan workers to research tools and rejects apply and merge controls. RSC blocks the implementation agent in Plan. `RSC_OMP_STRICT_PLAN=1` blocks any spawn that reaches the extension event. Subagents cannot approve guarded Bash actions. |
+| Native `/commit`, user shell, direct extension execution and internal calls outside the registry | These surfaces depend on OMP settings, the operator and host isolation. RSC's Bash guards cover calls delivered through `tool_call`. |
+
+A required Danger or Ship script that is missing, crashes or times out blocks the command and names
+the file to repair with `rsc sync`. Danger honors `.rsc/.no-danger-guard` and an explicit
+`dangerGuard: false`. The accepted `codeHooks: false` policy omits Ship. The Ship script's
+`.rsc/.no-ship-guard` marker only turns off its branch hygiene checks. ASDD and sello have their
+own settings. `/rsc-native-status` reports which guards are present, required, optional or off.
+
+A native `ask` form, a timeout and a session-wide grant cannot authorize a guarded action. When
+the RSC approval prompt is available, it shows the command and working directory and accepts a
+one-time response. OMP's interactive host supplies the response, including any collaboration UI it
+has enabled. Host-level isolation is needed to enforce policy across arbitrary shell programs,
+worktree changes inside a compound shell command, tool implementations and direct execution.
 
 > **Limit, stated plainly.** Those guards run in **Claude Code** and **Oh My Pi**. In Codex, Gemini,
 > Cursor and OpenCode the same rules travel in the skills and the session memory. They are followed,
@@ -237,6 +266,14 @@ project. rsc handles four things by default:
 | **One workspace per agent** | If another session works in the same folder, new work goes to `.worktrees/<branch>/` at the root you work in (never inside a project folder) and is never committed. A `post-merge` hook retires it once the branch lands. | `rsc isolation off` |
 | **The agent picks the method** | FTD for simple changes, ASDD for complex ones. The agent decides and says why. | Ask for the other lane |
 | **Knowledge reaches everyone** | `01-TOOLS/`, `02-DOCS/wiki/` and `02-DOCS/attachments/` travel through one exchange branch, `rsc/knowledge`, and reach `main` inside your normal pull requests. | `rsc knowledge-sync off` |
+
+**Emoji.** The install asks once whether rsc may use emoji (`--emoji <on|off>`, default on). With it off, rsc writes `.rsc/.no-emoji` and uses none: not in replies, not in commits, not in its own output. Change it later with `rsc emoji <on|off>`; `rsc doctor` reports it.
+
+**Orca worktrees.** Set `"worktreeManager": "orca"` in `.rsc.json` to retain externally managed
+checkouts even when Orca is unavailable. rsc also recognises a matching Orca CLI response, and never
+removes these checkouts through plain Git. [Setup and cleanup](skills/worktrees/references/orca.md)
+use the pinned harness version and Orca's lifecycle hooks; workspace lineage does not silence
+warnings about unverified concurrent sessions.
 
 **How it knows a project is complex.** A hook counts what anyone can check: a CI setup, a deployment
 file (`Dockerfile`, `vercel.json`, `fly.toml`…) or at least two people in the last 50 commits. The
@@ -371,13 +408,14 @@ The wizard asks which ones; `--target a,b` does it non-interactively.
 | `opencode` | `.opencode/skills/<id>/` → symlink (discovered natively) | block in `AGENTS.md` |
 | `deepseek` | `.dsh/skills/<id>/` → symlink (discovered natively) | block in `AGENTS.md` |
 | `omp` | `.omp/skills/<id>/` → symlink (discovered natively) | block in `.omp/AGENTS.md` + sticky rules in `.omp/RULES.md` |
+| `pi` | `.pi/skills/<id>/` → symlink (copy on Windows; discovered natively) | block in Pi's selected project context file |
 | `jules` | `.jules/rsc/<id>/` → symlink | block in `AGENTS.md` |
 | `junie` | `.junie/rsc/<id>/` → symlink | block in `.junie/guidelines.md` |
 | `kiro` | `.kiro/rsc/<id>/` → symlink | doc in `.kiro/steering/rsc-suggest.md` |
 | `aider` | `.aider/rsc/<id>/` → symlink | block in `CONVENTIONS.md` |
 
 > `codex`, `zed`, `amp`, `opencode`, `deepseek` and `jules` share one root `AGENTS.md`; the block is
-> written once.
+> written once. Pi shares it when that is the context file its native loader selects.
 
 > **DeepSeek Harness** (`dsh`) has no project-level hooks, so once per machine rsc adds one marked
 > block to `~/.dsh/cordis.patch.yml` that runs the hooks of whichever project the session is in.
@@ -407,6 +445,19 @@ The wizard asks which ones; `--target a,b` does it non-interactively.
 > `omp config set display.pinnedAgents full`. The same adapter tells the main session to turn the
 > compass's `➡️` options into OMP's native `ask` form, with the recommended option preselected.
 > `ask` only exists in interactive sessions; in `-p`/RPC the question stays in prose.
+>
+> **Pi:** select `--target pi` during onboarding, then run `/reload` in Pi to discover the
+> installed skills. Invoke one explicitly with `/skill:<id>`. Pi loads project resources after
+> project trust is granted; rsc preserves your `.pi/settings.json` and extensions.
+> This target uses Pi's [native skills and context files](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/configuration.md).
+> Its [context loader](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/core/resource-loader.ts)
+> selects the first readable file in this order: `AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`,
+> `CLAUDE.md`, `CLAUDE.MD`. rsc adds its marked block to that file, preserving your instructions;
+> it creates `AGENTS.md` only when none exists. If a new override hides the block, doctor reports
+> the missing wiring and sync writes the block into the selected file.
+> It does not install a custom extension, subagents, automatic session-memory hooks, or tool guards.
+> Pi has no built-in subagents; skills that require independent reviewers need an external review.
+> The instructions request an update check on the first turn, as for other targets without a wired session hook.
 
 | Targets | Stack agents | Native commands | Session memory |
 | --- | --- | --- | --- |
@@ -416,6 +467,7 @@ The wizard asks which ones; `--target a,b` does it non-interactively.
 | Gemini CLI, OpenCode | yes | yes | full |
 | DeepSeek Harness | unsupported | unsupported | full (machine bridge) |
 | Oh My Pi | yes | yes | full |
+| Pi | unsupported | native `/skill:<id>` (no generated command files) | unsupported |
 | GitHub Copilot | yes | yes | unsupported |
 | Junie, Kiro | yes | unsupported | unsupported |
 | Windsurf, Cline, Roo | unsupported | yes | unsupported |
@@ -773,3 +825,5 @@ run an explicit install, which records the new decision; sync alone does not era
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+*Made in Andorra*

@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdtempSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { tmpdir } from './helpers/scratch.js';
 import * as agents from '../targets/agents.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -119,6 +119,8 @@ test('a requested stack agent renders natively with its declared tools on all 9 
         assert.doesNotMatch(text, /^name:/m);
         assert.doesNotMatch(text, /^tools:/m);
         assert.doesNotMatch(text, /: true$/m);
+      } else if (target === 'claude') {
+        assert.match(text, /^tools: Read, Grep, Glob$/m);
       } else if (target === 'omp') {
         // OMP names the tool `grep`; `search` survives only as its legacy alias.
         assert.match(text, /^tools: \[read, grep\]$/m);

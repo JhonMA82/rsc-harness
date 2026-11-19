@@ -1,6 +1,6 @@
 /**
  * Target-local OMP native interoperability. No changes to shared rsc skills or scripts.
- * Validated against OMP 18.20.2; feature detection keeps older builds safe.
+ * OMP 18.20.2 and 19.0.0 share this extension contract.
  * Do not replace OMP's task/todo/ask runtimes: configure and use their native APIs.
  */
 import { existsSync } from 'node:fs';
@@ -78,10 +78,10 @@ export function configureOmpNative(pi, lookup) {
 }
 
 let registryPromise;
-export async function configureLiveOmpNative(pi) {
+export async function configureLiveOmpNative(pi, hostRegistry) {
   try {
-    registryPromise ??= import('@oh-my-pi/pi-coding-agent/config/registry').catch(() => null);
-    const registry = await registryPromise;
+    const registry = hostRegistry ?? await (registryPromise ??=
+      import('@oh-my-pi/pi-coding-agent/config/registry').catch(() => null));
     const result = configureOmpNative(pi, registry?.lookup);
     const dualMemory = memoryCoexistenceWarning(registry?.lookup, pi);
     if (dualMemory) result.warnings.push(dualMemory);
@@ -108,10 +108,14 @@ export function guardVerdict(error, stdout, critical = false) {
   return critical ? { decision: 'deny', reason: 'rsc critical guard returned an invalid decision; command denied.' } : null;
 }
 
-/** OMP mode state: plan/goal are 'active' | 'paused' | 'inactive'. */
+/** OMP reports Plan as a status object. Accept the older flat shape as well. */
 export function nativeModeState(ctx, fallback = null) {
-  try { return ctx?.sessionModes?.getState?.() ?? fallback; }
-  catch { return fallback; }
+  let state = fallback;
+  try { state = ctx?.sessionModes?.getState?.() ?? fallback; }
+  catch { /* use the last mode_changed snapshot */ }
+  return state?.plan && typeof state.plan === 'object'
+    ? { ...state, plan: state.plan.status }
+    : state;
 }
 
 export function nativeGuidance(ctx, pi, fallbackModes = null, native = null, { warnings = true } = {}) {
@@ -161,7 +165,7 @@ export function memoryCoexistenceWarning(lookup, pi) {
 export function nativeStatus(pi, lookup, ctx, root) {
   const scope = pi?.pi?.settings;
   const value = (key) => { try { return lookup?.(key)?.get?.(scope); } catch { return undefined; } };
-  const keys = ['task.steps','task.autoParallel','todo.eager','todo.midRunNudges','commit.enabled','session.worktreeScope','memory.backend','tools.approval'];
+  const keys = ['task.steps','task.autoParallel','todo.eager','todo.midRunNudges','commit.enabled','session.worktreeScope','memory.backend','tools.approval','tools.approvalMode','task.crossInstance','task.agentPrewalkAuto','mcp.evalNamespaces'];
   const values = Object.fromEntries(keys.map(k=>[k,value(k)]));
   const modes = nativeModeState(ctx);
   const notes = [];
@@ -179,10 +183,10 @@ export function nativeStatus(pi, lookup, ctx, root) {
 }
 
 /** Current native runtime status for OMP's /rsc-native-status command. */
-export async function liveNativeStatus(pi, ctx, root) {
+export async function liveNativeStatus(pi, ctx, root, hostRegistry) {
   try {
-    registryPromise ??= import('@oh-my-pi/pi-coding-agent/config/registry').catch(() => null);
-    const registry = await registryPromise;
+    const registry = hostRegistry ?? await (registryPromise ??=
+      import('@oh-my-pi/pi-coding-agent/config/registry').catch(() => null));
     return nativeStatus(pi, registry?.lookup, ctx, root);
   } catch { return nativeStatus(pi, null, ctx, root); }
 }

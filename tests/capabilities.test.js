@@ -8,7 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, symlinkSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { tmpdir } from './helpers/scratch.js';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -168,7 +168,7 @@ test('capabilities: the agent-capable partition is exactly the declared one', ()
   const withAgents = TARGET_IDS.filter((t) => targetHasAgents(t));
   assert.deepEqual([...withAgents].sort(), [...AGENT_TARGET_IDS].sort());
   assert.equal(withAgents.length, 9, 'if this changes, update the spec and the docs that quote the number');
-  assert.equal(TARGET_IDS.length - withAgents.length, 10);
+  assert.equal(TARGET_IDS.length - withAgents.length, 11);
   for (const t of TARGET_IDS.filter((x) => !targetHasAgents(x))) {
     const r = listAgents({ target: t, home, cwd });
     assert.equal(r.supported, false, `${t} should report unsupported`);

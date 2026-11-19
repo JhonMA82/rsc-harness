@@ -1,9 +1,11 @@
 #!/usr/bin/env node
+import { claudeBootstrapPath } from '../targets/claude-lifecycle.js';
 import { rmSync, rmdirSync, existsSync, cpSync, lstatSync, mkdirSync, readFileSync, realpathSync, readlinkSync, writeFileSync, appendFileSync, readdirSync, renameSync } from 'node:fs';
 import { join, dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { planInstall } from './install-plan.js';
+import { installedCli, materializeCliInstructions } from './lib/cli-invocation.js';
 import { targetPaths, writeSkill, wireHook, unwireHook, baseDir, TARGET_IDS } from '../targets/index.js';
 import { shadowTarget } from '../targets/agents-md-shadow.js';
 import {
@@ -88,13 +90,16 @@ function legacyOpenCodeSkillPath(target, cwd, id) {
 // overwriting on a version change is safe. Mutates `baseVersions` with the new mark.
 function ensureBase(id, cwd, baseVersions) {
   const dest = baseDir(id, cwd);
-  const stale = baseVersions[id] !== CLI_VERSION;
+  const local = installedCli();
+  const stamp = `${CLI_VERSION}:${local ? 'rsc' : 'npx'}`;
+  const stale = baseVersions[id] !== stamp;
   if (stale && existsSync(dest)) rmSync(dest, { recursive: true, force: true });
   if (!existsSync(dest)) {
     mkdirSync(dirname(dest), { recursive: true });
     cpSync(join(ROOT, 'skills', id), dest, { recursive: true });
+    materializeCliInstructions(dest, local);
   }
-  baseVersions[id] = CLI_VERSION;
+  baseVersions[id] = stamp;
   return dest;
 }
 
@@ -112,6 +117,7 @@ export function generatedHookFiles({ target, cwd, policy }) {
     join(cwd, '.rsc', 'worklog-checkpoint.mjs'),
     join(cwd, '.rsc', 'hook-once.mjs'),
     join(cwd, '.rsc', 'shell-unwrap.mjs'),
+    join(cwd, '.rsc', 'emoji-policy.mjs'),
     join(cwd, '.rsc', 'worktree-reaper.mjs'), join(cwd, '.rsc', 'risk-policy.mjs'),
     join(cwd, '.rsc', 'auto-update.mjs'),
     join(cwd, '.rsc', 'memslop-offer.mjs'),
@@ -140,6 +146,10 @@ export function managedPathsForInstall({ skillIds, agentIds = [], target, home, 
   const paths = targetPaths(target, home, cwd);
   const plan = planInstall({ skillIds, target, home, cwd, hooks: policy?.alwaysOn !== false });
   const out = [paths.stateFile, versionFile(cwd), baseVersionsFile(cwd)];
+  // Knowledge/memory wiring also needs this shared dependency without suggest.
+  if (target === 'claude') out.push(claudeBootstrapPath(cwd));
+  // Pi can move its managed block when the native context-file precedence changes.
+  if (target === 'pi') out.push(...paths.contextFiles);
   if (policy?.context7 === false) out.push(join(cwd, '.rsc', '.no-context7'));
   if (policy?.memory !== false) out.push(...memoryManagedPaths(target, cwd));
   out.push(...updateManagedPaths(target, cwd));
@@ -266,6 +276,7 @@ export function recordInManifest({ cwd, target, skillIds, agentIds = [], catalog
     memory: prev.memory,
     gitPermissions: gitPermissions ?? prev.gitPermissions,
     agentModels: prev.agentModels,
+    worktreeManager: prev.worktreeManager,
     onboarding: onboarding ?? prev.onboarding,
   });
 }

@@ -32,7 +32,7 @@ const TIER_MODEL = {
 // (Amp/Zed/Windsurf/Cline/Roo/Continue/Aider/Jules/Antigravity) — there the developer
 // model is advisory (model-routing), not a file.
 const AGENT_TARGETS = {
-  claude: { dir: '.claude/agents', ext: '.md', format: 'md', model: (t) => (t === 'heavy' ? 'opus' : 'sonnet') },
+  claude: { dir: '.claude/agents', ext: '.md', format: 'md', toolsFormat: 'claude', model: (t) => (t === 'heavy' ? 'opus' : 'sonnet') },
   junie: { dir: '.junie/agents', ext: '.md', format: 'md', model: (t) => (t === 'heavy' ? 'opus' : 'sonnet') },
   cursor: { dir: '.cursor/agents', ext: '.md', format: 'md', model: (t) => TIER_MODEL.anthropic[t] },
   // #298 — OpenCode is the one tool people point at a local model or another provider per session, so
@@ -234,6 +234,8 @@ const RESTRICT_V2 = { edit: 'edit', shell: 'shell' };
 // `search` as a legacy alias for `grep`, but being explicit keeps an unknown alias from silently
 // granting nothing (or everything) in a future release.
 const OMP_TOOLS = { search: 'grep', shell: 'bash' };
+// Claude accepts native tool names, not the catalog's provider-neutral capabilities.
+const CLAUDE_TOOLS = { read: ['Read'], search: ['Grep', 'Glob'], edit: ['Edit', 'Write'], shell: ['Bash'] };
 function restrictedTools(tools) {
   if (!tools) return [];
   return Object.entries(RESTRICT_TOOLS).filter(([cap]) => !tools.includes(cap)).flatMap(([, names]) => names);
@@ -265,6 +267,12 @@ function renderMd(spec, model, agent, toolsFormat = spec.toolsFormat) {
         fm.push('tools:');
         for (const tool of denied) fm.push(`  ${tool}: false`);
       }
+    } else if (toolsFormat === 'claude') {
+      const names = agent.tools.flatMap((capability) => {
+        if (!CLAUDE_TOOLS[capability]) throw new Error(`Unknown Claude tool capability: ${capability}`);
+        return CLAUDE_TOOLS[capability];
+      });
+      fm.push(`tools: ${[...new Set(names)].join(', ')}`);
     } else if (toolsFormat === 'map') {
       fm.push('tools:');
       for (const tool of agent.tools) fm.push(`  ${tool}: true`);
@@ -353,6 +361,10 @@ function knownRenderings(target, cwd, agent) {
   for (const tier of ['balanced', 'heavy']) {
     for (const model of new Set([resolveModel(target, cwd, tier), spec.model(tier)])) {
       for (const format of formats) out.add(renderAgent(target, spec, model, agent, format));
+    }
+    if (target === 'claude') {
+      out.add(renderAgent(target, spec, resolveModel(target, cwd, tier), agent, 'list'));
+      out.add(renderAgent(target, spec, spec.model(tier), agent, 'list'));
     }
     if (spec.legacyModel) out.add(renderAgent(target, spec, spec.legacyModel(tier), agent, 'map'));
   }

@@ -5,26 +5,32 @@
 // the same lifecycle rsc gives Claude Code — session memory, update notice, knowledge sync, the
 // per-turn lane gate and the deterministic guards — without pretending OMP reads Claude's settings.
 //
-// Every sibling import is optional and loaded in a try/catch. A project that disabled memory, or a
-// clone that only has part of `.rsc/`, still runs what is there; nothing here may throw inside an
-// OMP event. Tool guards run in every session. Only the top-level session owns memory, update,
+// Memory and other optional integrations fail softly. Critical bash guard scripts are required
+// when the installed policy selects them. Only the top-level session owns memory, update,
 // knowledge and the copy guard: a subagent's turn is not a person's turn.
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 // The native layer is optional like every sibling above: a `.rsc/` from before this module, or an
 // interrupted copy, must cost the native settings, never the guards, memory or lane gate.
 const native = await import('./omp-native.mjs').catch(() => null);
 const NO_NATIVE = { available: false, applied: [], preserved: [], warnings: [], effective: {} };
-const configureLiveOmpNative = (handle) => (native?.configureLiveOmpNative
-  ? native.configureLiveOmpNative(handle) : Promise.resolve(NO_NATIVE));
+const configureLiveOmpNative = (handle, hostRegistry) => (native?.configureLiveOmpNative
+  ? native.configureLiveOmpNative(handle, hostRegistry) : Promise.resolve(NO_NATIVE));
 const modeFromContext = (ctx, fallback = null) => {
-  try { return ctx?.sessionModes?.getState?.() ?? fallback; } catch { return fallback; }
+  let state = fallback;
+  try { state = ctx?.sessionModes?.getState?.() ?? fallback; }
+  catch { /* use the last mode_changed snapshot */ }
+  return state?.plan && typeof state.plan === 'object'
+    ? { ...state, plan: state.plan.status }
+    : state;
 };
 const nativeModeState = (ctx, fallback = null) => (native?.nativeModeState
   ? native.nativeModeState(ctx, fallback) : modeFromContext(ctx, fallback));
+// OMP's Plan subagent allow-list plus the main-session question, task and todo controls.
+const PLAN_TOOLS = new Set(['read', 'grep', 'glob', 'web_search', 'ast_grep', 'ask', 'todo', 'task']);
 const PLAN_LINE = '- OMP Plan is ACTIVE: read/research/plan only; no edits, exec mutations, native /commit or implementation subagent until Plan is exited and rsc approval exists.';
 const nativeGuidance = (ctx, pi, modes = null, applied = null, options = {}) => {
   if (native?.nativeGuidance) return native.nativeGuidance(ctx, pi, modes, applied, options);
@@ -32,8 +38,8 @@ const nativeGuidance = (ctx, pi, modes = null, applied = null, options = {}) => 
   // settings, only the mode state OMP exposes on the context.
   return nativeModeState(ctx, modes)?.plan === 'active' ? PLAN_LINE : '';
 };
-const liveNativeStatus = (handle, ctx, root) => (native?.liveNativeStatus
-  ? native.liveNativeStatus(handle, ctx, root) : Promise.resolve({ ...NO_NATIVE, guardFiles: [] }));
+const liveNativeStatus = (handle, ctx, root, hostRegistry) => (native?.liveNativeStatus
+  ? native.liveNativeStatus(handle, ctx, root, hostRegistry) : Promise.resolve({ ...NO_NATIVE, guardFiles: [] }));
 const approvalGranted = (answer) => (native?.approvalGranted
   ? native.approvalGranted(answer) : answer === 'once');
 
@@ -99,9 +105,9 @@ export function guardRuntime(execPath = process.execPath, versions = process.ver
 export function hostAutoApproves(registry, scope) {
   try {
     const bash = String(registry?.lookup?.('tools.approval')?.get?.(scope)?.bash ?? '').toLowerCase();
-    if (bash === 'prompt') return false;
-    if (bash === 'allow') return true;
     const mode = registry?.lookup?.('tools.approvalMode')?.get?.(scope);
+    if (bash === 'allow') return true;
+    if (bash === 'prompt') return false;
     // An absent/unknown registry is not evidence of a real approval dialog.
     return mode !== 'always-ask' && mode !== 'always-ask-cached' && mode !== 'write';
   } catch { return true; }
@@ -126,18 +132,22 @@ export function pluginConfigPath(env = process.env) {
     && profile !== '.' && profile !== '..' && !profile.endsWith('.');
   const suffix = named ? ['profiles', profile] : [];
   const normal = join(home, env.PI_CONFIG_DIR || '.omp', ...suffix);
-  const xdg = env.XDG_DATA_HOME ? join(env.XDG_DATA_HOME, 'omp', ...suffix) : null;
+  const useXdg = ['linux', 'darwin'].includes(process.platform)
+    && (named || !String(env.PI_CODING_AGENT_DIR ?? '').trim()
+      || resolve(env.PI_CODING_AGENT_DIR) === join(normal, 'agent'));
+  const xdg = useXdg && env.XDG_DATA_HOME ? join(env.XDG_DATA_HOME, 'omp', ...suffix) : null;
   return join(xdg && existsSync(xdg) ? xdg : normal, 'plugins', 'omp-plugins.lock.json');
 }
 
 /** Pure read of the switch map: an unreadable or absent registry keeps the harness fully on. */
-export function readPluginSwitches(env = process.env, cwd = ROOT) {
+export function readPluginSwitches(env = process.env, cwd = ROOT, runtimeCwd = cwd) {
   const on = Object.fromEntries(PLUGIN_SWITCHES.map((key) => [key, true]));
   const read = (path) => { try { return JSON.parse(readFileSync(path, 'utf8'))?.settings?.[PLUGIN_NAME] || {}; } catch { return {}; } };
   const global = read(pluginConfigPath(env));
   // OMP hard-codes `.omp` for project-local files; PI_CONFIG_DIR only moves the machine root.
-  const local = read(join(cwd, '.omp', 'plugin-overrides.json'));
-  const saved = { ...global, ...local };
+  const project = read(join(cwd, '.omp', 'plugin-overrides.json'));
+  const local = runtimeCwd === cwd ? {} : read(join(runtimeCwd, '.omp', 'plugin-overrides.json'));
+  const saved = { ...global, ...project, ...local };
   for (const key of PLUGIN_SWITCHES) {
     if (saved[key] === false || String(saved[key]).toLowerCase() === 'false') on[key] = false;
   }
@@ -206,13 +216,78 @@ function messageText(message) {
   return '';
 }
 
-function runGuard(script, root, payload, cwd, critical = false) {
+const readJson = (path) => {
+  try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; }
+};
+
+function nearestRoot(start, marker) {
+  for (let dir = start; ; dir = dirname(dir)) {
+    if (existsSync(join(dir, marker))) return dir;
+    if (dirname(dir) === dir) return null;
+  }
+}
+
+function bashWorkingDirectory(sessionCwd, requestedCwd) {
+  let path = requestedCwd || '.';
+  if (/^file:\/\//iu.test(path)) path = fileURLToPath(path);
+  // Virtual OMP directories run Bash in the session's host cwd. Bare slashes alias the workspace.
+  if (/^\/+$/u.test(path) || path.includes('://')) path = '.';
+  path = path.replace(/^~(?=[/\\]|$)/u, () => homedir());
+  return realpathSync(resolve(sessionCwd, path));
+}
+
+function guardPolicies(policyRoot, gitRoot) {
+  const state = readJson(join(policyRoot, '.omp', 'skills', '.rsc-state.json'));
+  const manifest = readJson(join(policyRoot, '.rsc.json'));
+  const policy = state?.policy ?? manifest?.onboarding?.plan?.policy ?? {};
+  const managed = Boolean(state || (Array.isArray(manifest?.targets) && manifest.targets.includes('omp')));
+  // Ship combines branch hygiene with ASDD and sello. Its marker disables only branch hygiene.
+  return [
+    { name: 'danger-guard.mjs', root: policyRoot,
+      enabled: policy.dangerGuard !== false && !existsSync(join(policyRoot, '.rsc', '.no-danger-guard')),
+      required: managed, critical: true },
+    { name: 'ship-guard.mjs', root: gitRoot ?? policyRoot,
+      enabled: policy.codeHooks !== false,
+      required: Boolean(gitRoot) && managed, critical: true },
+    { name: 'branch-guard.mjs', root: policyRoot, enabled: policy.codeHooks !== false },
+    { name: 'gitmoji-guard.mjs', root: policyRoot,
+      enabled: policy.codeHooks !== false && policy.gitmojiGuard !== false },
+  ].map(guard => {
+    const path = join(policyRoot, '.rsc', guard.name);
+    return { ...guard, path, present: existsSync(path) };
+  });
+}
+
+async function needsDeliveryApproval(policyRoot, command) {
+  const asdd = await optional(pathToFileURL(join(policyRoot, '.rsc', 'asdd-gate.mjs')));
+  if (asdd?.isPushOrPr(command)) return true;
+  const shell = await optional(pathToFileURL(join(policyRoot, '.rsc', 'shell-unwrap.mjs')));
+  const gitMerge = /(?:^|\s)(?:[^\s]+\/)?git\s+(?:(?:-[Cc]\s+(?:"[^"]*"|'[^']*'|\S+)|--[^\s]+)\s+)*merge(?=\s|$)/u;
+  return (shell?.expand(command) ?? [command]).some(segment => gitMerge.test(segment.replace(
+    /"([^"\\]|\\.)*"|'[^']*'/gu, '""',
+  )));
+}
+
+function runGuard(guard, payload, executionCwd) {
+  if (!guard.enabled) return null;
+  const { path, root, critical, present, required } = guard;
+  if (!present && !required) return null;
+  const failed = (reason) => ({
+    decision: 'deny',
+    reason: `${path}: ${reason} Run rsc sync in the harness project to repair it.`,
+  });
+  if (!present) return failed('Required guard is missing.');
+  if (required && critical) {
+    const dependencies = guard.name === 'ship-guard.mjs'
+      ? ['shell-unwrap.mjs', 'sello.mjs', 'asdd-gate.mjs', 'spec-completeness.mjs', 'risk-policy.mjs', 'trunk-policy.mjs']
+      : ['shell-unwrap.mjs'];
+    const missing = dependencies.find(name => !existsSync(join(dirname(path), name)));
+    if (missing) return failed(`Required guard dependency ${missing} is missing.`);
+  }
   return new Promise((done) => {
-    if (!existsSync(script)) { done(null); return; }
-    let child;
     try {
-      child = execFile(guardRuntime(), [script, root], {
-        cwd: cwd || root,
+      const child = execFile(guardRuntime(), [path, root], {
+        cwd: executionCwd,
         timeout: GUARD_TIMEOUT,
         windowsHide: true,
         encoding: 'utf8',
@@ -220,19 +295,23 @@ function runGuard(script, root, payload, cwd, critical = false) {
         env: { ...process.env, RSC_OMP: '1' },
       }, (error, stdout) => {
         const verdict = guardVerdict(error, stdout, critical);
-        done(verdict ? { ...verdict, critical } : verdict);
+        if (critical && (error || verdict?.reason.startsWith('rsc critical guard returned'))) {
+          done(failed(verdict.reason));
+        } else {
+          done(verdict);
+        }
       });
       child.stdin.on('error', () => { /* the child may exit before reading */ });
       child.stdin.end(payload);
-    } catch (error) {
-      done(guardVerdict(error, '', critical));
+    } catch {
+      done(critical ? failed('Guard could not start.') : null);
     }
   });
 }
 
 async function askPerson(ctx, reason) {
   try {
-    if (ctx?.hasUI && typeof ctx.ui?.approve === 'function') {
+    if (isMain(ctx) && ctx?.hasUI && typeof ctx.ui?.approve === 'function') {
       const answer = await ctx.ui.approve({
         full: reason,
         compact: 'rsc guard: confirm this command before it runs',
@@ -282,11 +361,11 @@ export function pinOmpTodoDefault(pi, lookup) {
 }
 
 /** The runtime half: honor both opt-outs, then pin the default through OMP's own registry. */
-export async function applyOmpTodoDefault(pi) {
+export async function applyOmpTodoDefault(pi, hostRegistry) {
   try {
     if (process.env[TODO_OPT_OUT] === '1') return false;
     if (existsSync(join(ROOT, '.rsc', '.no-omp-todo'))) return false;
-    const registry = await loadSettingsRegistry();
+    const registry = hostRegistry ?? await loadSettingsRegistry();
     return pinOmpTodoDefault(pi, registry?.lookup);
   } catch {
     return false;
@@ -312,7 +391,7 @@ export function askReminder(pi, ctx) {
 
 const loadedApis = new WeakSet();
 
-export default async function rscOmp(pi) {
+export default async function rscOmp(pi, hostRegistry) {
   // The project loader and the machine-level resolver can reach the same OMP process (a future OMP
   // that walks up for hooks, or an explicit --hook). Registering every event twice would double the
   // context and run every guard twice, so the API object is the identity of one registration.
@@ -322,18 +401,20 @@ export default async function rscOmp(pi) {
   }
   // The project loader can run independently of the plugin extension. Respect an
   // operator-disabled plugin, including the project-level disabled list.
-  if (isOmpPluginDisabled()) return;
+  const launchCwd = resolve(process.cwd());
+  const runtimeCwd = nearestRoot(launchCwd, '.rsc.json') === ROOT ? launchCwd : ROOT;
+  if (isOmpPluginDisabled() || (runtimeCwd !== ROOT && isOmpPluginDisabled(process.env, runtimeCwd))) return;
   const mods = await loadAll();
-  const switches = readPluginSwitches();
-  const initialNative = switches.native ? await configureLiveOmpNative(pi) : NO_NATIVE;
+  const switches = readPluginSwitches(process.env, ROOT, runtimeCwd);
+  const initialNative = switches.native ? await configureLiveOmpNative(pi, hostRegistry) : NO_NATIVE;
   // Backward-compatible opt-in only. Unconditional todo.eager=always forces a list even on Answer.
-  if (process.env.RSC_OMP_TODO_EAGER === '1') await applyOmpTodoDefault(pi);
+  if (process.env.RSC_OMP_TODO_EAGER === '1') await applyOmpTodoDefault(pi, hostRegistry);
   const state = {
     resume: '',
     update: null,
     firstPrompt: true,
     stopRan: false,
-    ended: false,
+    session: null,
     native: initialNative,
     nativeModes: null,
     warningsShown: false,
@@ -389,19 +470,24 @@ export default async function rscOmp(pi) {
           ctx?.ui?.notify?.('rsc/OMP: the native integration is turned off in Settings → Plugins → rsc-harness.', 'info');
           return;
         }
-        const applied = await configureLiveOmpNative(pi);
+        const applied = state.native;
         const cwd = resolve(ctx?.cwd || ROOT);
-        const status = await liveNativeStatus(pi, ctx, projectOf(cwd));
+        const status = await liveNativeStatus(pi, ctx, projectOf(cwd), hostRegistry);
         const settings = ['task.steps','task.autoParallel','todo.eager','todo.midRunNudges','commit.enabled','session.worktreeScope','memory.backend']
           .map(k => k+'='+String(status[k]))
           .concat('tools.approval.eval='+String(status['tools.approval']?.eval));
+        for (const key of ['tools.approvalMode', 'task.crossInstance', 'task.agentPrewalkAuto', 'mcp.evalNamespaces']) {
+          if (status[key] !== undefined) settings.push(key+'='+JSON.stringify(status[key]));
+        }
         const lines = [
           'rsc/OMP native',
           'Settings: '+ settings.join(', '),
           'Preserved: '+ applied.preserved.join(', '),
           'Warnings: '+ [...applied.warnings,...status.notes].join('; '),
           'Plan mode: '+ String(nativeModeState(ctx)?.plan || 'unknown'),
-          'Guards: '+ status.guardFiles.map(g => g.name+':'+(g.present?'present':'missing')).join(', '),
+          'Guards: '+ guardPolicies(nearestRoot(cwd, '.rsc.json') ?? ROOT, nearestRoot(cwd, '.git'))
+            .map(g => g.name+':'+(!switches.guards || !g.enabled ? 'off'
+              : g.present ? 'present' : g.required ? 'missing (run rsc sync)' : 'optional')).join(', '),
         ];
         ctx?.ui?.notify?.(lines.join('\n'),'info');
       },
@@ -423,15 +509,23 @@ export default async function rscOmp(pi) {
     try {
       if (!isMain(ctx)) return;
       // A settings reload can drop a runtime override; re-pin before the first prompt of a session.
-      state.native = switches.native ? await configureLiveOmpNative(pi) : NO_NATIVE;
-      if (process.env.RSC_OMP_TODO_EAGER === '1') await applyOmpTodoDefault(pi);
+      const cwd = resolve(ctx?.cwd || ROOT);
+      const id = sessionId(null, ctx);
+      if (state.session && state.session.id !== id) {
+        lifecycle('end', { session_id: state.session.id }, { cwd: state.session.cwd });
+      }
+      const session = { id, cwd };
+      state.session = session;
+      const settings = switches.native ? await configureLiveOmpNative(pi, hostRegistry) : NO_NATIVE;
+      if (process.env.RSC_OMP_TODO_EAGER === '1') await applyOmpTodoDefault(pi, hostRegistry);
+      if (state.session !== session) return;
+      state.native = settings;
       state.nativeModes = nativeModeState(ctx);
       state.warningsShown = false;
       state.resume = '';
       state.firstPrompt = true;
       state.stopRan = false;
-      state.ended = false;
-      const cwd = resolve(ctx?.cwd || ROOT);
+      state.update = null;
       const project = projectOf(cwd);
       const result = lifecycle('start', { session_id: sessionId(null, ctx) }, ctx);
       state.resume = switches.memory
@@ -492,11 +586,11 @@ export default async function rscOmp(pi) {
       const project = projectOf(cwd);
       const chunks = [];
 
-      if (state.firstPrompt) {
-        if (state.update) {
-          const notice = await state.update;
-          if (notice) chunks.push(notice);
-        }
+      if (state.firstPrompt && state.update) {
+        const session = state.session;
+        const notice = await state.update;
+        if (state.session !== session) return;
+        if (notice) chunks.push(notice);
       }
       if (state.resume) chunks.push(state.resume);
 
@@ -542,8 +636,12 @@ export default async function rscOmp(pi) {
   // Guards run in every session: a subagent running `rm -rf` is still destructive.
   pi.on('tool_call', async (event, ctx) => {
     try {
-      if (switches.native && nativeModeState(ctx, state.nativeModes)?.plan === 'active'
-          && ['bash', 'eval', 'write', 'edit'].includes(event?.toolName)) {
+      const plan = switches.native && nativeModeState(ctx, state.nativeModes)?.plan === 'active';
+      const toolName = event?.toolName;
+      const planTool = plan ? pi?.getAllTools?.().find(tool => tool.name === toolName) : null;
+      const source = planTool?.sourceInfo;
+      if (plan && (!PLAN_TOOLS.has(toolName) || planTool?.mcpServerName
+          || (source && (source.source !== 'builtin' || (source.path && source.path !== `<builtin:${toolName}>`))))) {
         return { block: true, reason: `rsc: ${event.toolName} cannot mutate the workspace while OMP Plan mode is active. Exit Plan and obtain the accepted rsc approval first.` };
       }
       // Strict execution is opt-in: arbitrary JS eval can spawn shell commands
@@ -555,41 +653,43 @@ export default async function rscOmp(pi) {
       if (event?.toolName !== 'bash') return;
       const command = event?.input?.command;
       if (typeof command !== 'string' || !command) return;
-      const cwd = resolve(ctx?.cwd || ROOT);
-      const project = projectOf(cwd);
-      const sid = sessionId(null, ctx);
+      const sessionCwd = resolve(ctx?.cwd || ROOT);
+      const projectRoot = nearestRoot(sessionCwd, '.rsc.json') ?? ROOT;
+      const requestedCwd = event?.input?.cwd;
+      const executionCwd = bashWorkingDirectory(sessionCwd, requestedCwd);
+      const gitRoot = nearestRoot(executionCwd, '.git');
+      const policyRoot = nearestRoot(executionCwd, '.rsc.json') ?? projectRoot;
       const payload = JSON.stringify({
         tool_name: 'Bash',
         tool_input: { command },
-        session_id: sid,
-        cwd,
+        session_id: sessionId(null, ctx),
+        cwd: executionCwd,
       });
-      // Claude-shaped stdin, one process per guard. They are independent by design; running them
-      // together keeps the added latency near one Node start instead of four.
-      const [danger, ship, branch, gitmoji] = await Promise.all([
-        runGuard(join(project, '.rsc', 'danger-guard.mjs'), project, payload, project, true),
-        runGuard(join(project, '.rsc', 'ship-guard.mjs'), cwd, payload, cwd, true),
-        runGuard(join(project, '.rsc', 'branch-guard.mjs'), project, payload, project),
-        runGuard(join(project, '.rsc', 'gitmoji-guard.mjs'), project, payload, project),
-      ]);
-      for (const verdict of [danger, ship, branch, gitmoji]) {
-        if (!verdict) continue;
-        if (verdict.decision === 'deny') return { block: true, reason: verdict.reason };
-        if (verdict.decision === 'ask') {
-          // The host's answer is only evidence when the host asks. Under yolo (or a bash=allow
-          // policy) `ui.approve` resolves without a person, so a critical guard blocks instead.
-          if (verdict.critical && hostAutoApproves(await loadSettingsRegistry(), pi?.pi?.settings)) {
-            return { block: true, reason: `${verdict.reason}\n\n${HOST_AUTO_APPROVES}` };
-          }
-          if (await askPerson(ctx, verdict.reason)) continue;
-          return {
-            block: true,
-            reason: `${verdict.reason}\n\nNo interactive approval was available, so the command did not run. `
-              + 'Ask the person to confirm it or to run it themselves.',
-          };
-        }
+      const guards = guardPolicies(policyRoot, gitRoot);
+      const verdicts = await Promise.all(guards.map(guard => runGuard(guard, payload, executionCwd)));
+      const ship = guards.find(guard => guard.name === 'ship-guard.mjs');
+      if (ship.enabled && ship.present && await needsDeliveryApproval(policyRoot, command)) {
+        verdicts.push({ decision: 'ask', reason: 'rsc: confirm publishing or merging this change.' });
       }
+      const denial = verdicts.find(verdict => verdict?.decision === 'deny');
+      if (denial) return { block: true, reason: denial.reason };
+      const approvals = verdicts.filter(verdict => verdict?.decision === 'ask');
+      if (!approvals.length) return;
+      const reason = approvals.map(verdict => verdict.reason).join('\n');
+      if (isMain(ctx) && ctx?.hasUI) {
+        if (hostAutoApproves(hostRegistry ?? await loadSettingsRegistry(), pi?.pi?.settings)) {
+          return { block: true, reason: `${reason}\n\n${HOST_AUTO_APPROVES}` };
+        }
+        if (await askPerson(ctx, `${reason}\n\nWorking directory: ${executionCwd}\nCommand: ${command}`)) return;
+      }
+      return {
+        block: true,
+        reason: `${reason}\n\nThe main session needs one interactive approval for this exact command.`,
+      };
     } catch {
+      if (switches.native && nativeModeState(ctx, state.nativeModes)?.plan === 'active') {
+        return { block: true, reason: 'rsc: could not verify this tool during OMP Plan mode.' };
+      }
       // If an unexpected runtime error occurs, do not silently permit a bash
       // command that may be destructive. Other tools retain their native policy.
       if (switches.guards && event?.toolName === 'bash')
@@ -690,9 +790,10 @@ export default async function rscOmp(pi) {
 
   pi.on('session_shutdown', async (_event, ctx) => {
     try {
-      if (!isMain(ctx) || state.ended) return;
-      state.ended = true;
-      lifecycle('end', { session_id: sessionId(null, ctx) }, ctx);
+      if (!isMain(ctx) || !state.session) return;
+      const { id, cwd } = state.session;
+      state.session = null;
+      lifecycle('end', { session_id: id }, { cwd });
     } catch { /* process is leaving */ }
   });
 }

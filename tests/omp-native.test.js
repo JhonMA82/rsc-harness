@@ -93,6 +93,10 @@ test('Native modes and guidance respect Plan, removed taskFile/blocked, and form
   const ctx={agent:{kind:'main'},sessionModes:{getState:()=>({plan:'active'})}};
   const pi={getActiveTools:()=>['task','ask','todo']};
   assert.equal(nativeModeState(ctx).plan,'active');
+  const real = { plan: { status: 'active', planFilePath: 'local://PLAN.md' } };
+  assert.equal(nativeModeState({ sessionModes: { getState: () => real } }).plan, 'active');
+  assert.equal(nativeModeState({}, real).plan, 'active');
+  assert.deepEqual(real.plan, { status: 'active', planFilePath: 'local://PLAN.md' });
   const msg=nativeGuidance(ctx,pi);
   for (const term of ['task.steps','task.autoParallel','taskFile','pending','ask({html})','Plan is ACTIVE','native /commit'])
     assert.match(msg,new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
@@ -129,7 +133,7 @@ test('Bridge registers OMP native events and preserves context on before_agent_s
     assert.ok(commands.has('rsc-native-status'));
     assert.ok(handlers.has('tool_result'));
     const ctx={cwd:project,mode:'tui',hasUI:true,agent:{kind:'main'},
-      sessionManager:{getSessionId:()=> 'native-test'},sessionModes:{getState:()=>({plan:'active'})}};
+      sessionManager:{getSessionId:()=> 'native-test'},sessionModes:{getState:()=>({plan:{status:'active'}})}};
     await handlers.get('session_start')({},ctx);
     const first=await handlers.get('before_agent_start')({reason:'prompt'},ctx);
     const second=await handlers.get('before_agent_start')({reason:'prompt'},ctx);
@@ -187,7 +191,7 @@ test('A bridge copied without its native sibling still loads, blocks Plan and fa
     assert.ok(handlers.has('session_start'),'the lifecycle still registers without the native module');
     assert.ok(handlers.has('tool_call'),'the bash guards still register without the native module');
     const ctx={cwd:project,mode:'tui',hasUI:false,agent:{kind:'main'},
-      sessionManager:{getSessionId:()=>'alone'},sessionModes:{getState:()=>({plan:'active'})}};
+      sessionManager:{getSessionId:()=>'alone'},sessionModes:{getState:()=>({plan:{status:'active'}})}};
     await handlers.get('session_start')({},ctx);
     const blocked=await handlers.get('before_subagent_spawn')({agent:'developer'},ctx);
     assert.equal(blocked?.block,true,'Plan mode still blocks the developer without the native module');
@@ -243,9 +247,9 @@ test('The presenter compacts only finished cards and the status command answers'
     writeFileSync(join(project,'.rsc','danger-guard.mjs'),'');
     let presenter=null;const commands=new Map();
     await bridge({
-      on(){},registerTranscriptPresenter:(fn)=>{presenter=fn;},
+      pi:{settings:{}},on(){},registerTranscriptPresenter:(fn)=>{presenter=fn;},
       registerCommand:(name,options)=>commands.set(name,options),getActiveTools:()=>['task','todo','ask'],
-    });
+    }, { lookup: key => ({ get: () => key === 'session.worktreeScope' ? 'directory' : undefined }) });
     assert.equal(presenter({type:'toolCall',toolName:'task'}),'compact');
     assert.equal(presenter({type:'toolCall',toolName:'todo'}),'compact');
     assert.equal(presenter({type:'toolCall',toolName:'task',isError:true}),undefined,'an error card stays visible');
@@ -259,7 +263,7 @@ test('The presenter compacts only finished cards and the status command answers'
     assert.equal(notified.level,'info');
     assert.match(notified.text,/rsc\/OMP native/);
     assert.match(notified.text,/tools\.approval\.eval=/,'the documented validation value is printed');
-    assert.match(notified.text,/session\.worktreeScope=/);
+    assert.match(notified.text,/session\.worktreeScope=directory/);
     assert.match(notified.text,/danger-guard\.mjs:present/);
   } finally { rmSync(project,{recursive:true,force:true}); }
 });

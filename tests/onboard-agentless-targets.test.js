@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, existsSync, readFileSync, readdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { tmpdir } from './helpers/scratch.js';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { dirname } from 'node:path';
@@ -21,8 +21,8 @@ import { AGENT_TARGET_IDS } from '../targets/agents.js';
 const AGENTLESS = TARGET_IDS.filter((t) => !AGENT_TARGET_IDS.includes(t));
 const plan = (agents) => ({ policy: { agents } });
 
-test('the ten agentless targets are expected to hold no agents', () => {
-  assert.deepEqual(AGENTLESS.sort(), ['aider', 'amp', 'antigravity', 'cline', 'continue', 'deepseek', 'jules', 'roo', 'windsurf', 'zed']);
+test('the eleven agentless targets are expected to hold no agents', () => {
+  assert.deepEqual(AGENTLESS.sort(), ['aider', 'amp', 'antigravity', 'cline', 'continue', 'deepseek', 'jules', 'pi', 'roo', 'windsurf', 'zed']);
   for (const target of AGENTLESS) {
     assert.deepEqual(expectedAgentsFor(target, plan(['developer', 'refuter-tests'])), [], target);
   }

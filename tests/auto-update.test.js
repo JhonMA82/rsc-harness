@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { tmpdir } from './helpers/scratch.js';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -152,6 +152,15 @@ test('a newer release than the failed one is tried at once', () => {
   const p = project('2.1.0');
   writeState(p.root, { from: '2.1.0', to: '2.2.0', startedAt: hoursAgo(2) });
   assert.match(sessionStart(p, '2.2.1'), /rsc updating/);
+  assert.ok(waitFor(join(p.root, 'called.json')));
+});
+
+test('a mixed OMP project requires opt-in before another target can auto-update it', () => {
+  const p = project('2.1.0');
+  writeFileSync(join(p.root, '.rsc.json'), JSON.stringify({ targets: ['claude', 'omp'] }));
+  assert.doesNotMatch(sessionStart(p, '2.2.0', { RSC_OMP_ALLOW_UPSTREAM_AUTO_UPDATE: '' }), /rsc updating|update available/);
+  assert.equal(existsSync(join(p.root, '.rsc', 'auto-update.json')), false);
+  assert.match(sessionStart(p, '2.2.0', { RSC_OMP_ALLOW_UPSTREAM_AUTO_UPDATE: '1' }), /rsc updating/);
   assert.ok(waitFor(join(p.root, 'called.json')));
 });
 

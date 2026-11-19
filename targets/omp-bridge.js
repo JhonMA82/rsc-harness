@@ -9,7 +9,7 @@
 // Everything under `.rsc/` is shared with the other targets. This module copies only what the
 // bridge itself runs; memory, update and knowledge copy their own modules in their own wiring.
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -25,7 +25,7 @@ const BRIDGE = 'omp-bridge.mjs';
 const COPY = ['copy-guard.mjs', 'copy-rules.mjs'];
 const DANGER = ['danger-guard.mjs', 'shell-unwrap.mjs'];
 const CODE = [
-  'shell-unwrap.mjs', 'risk-policy.mjs',
+  'shell-unwrap.mjs', 'risk-policy.mjs', 'emoji-policy.mjs',
   'ship-guard.mjs', 'branch-guard.mjs', 'gitmoji-guard.mjs',
   'sello.mjs', 'asdd-gate.mjs', 'spec-completeness.mjs', 'trunk-policy.mjs',
 ];
@@ -38,7 +38,9 @@ const LOADER_SOURCE = `// ${LOADER_MARKER}
 export default async function rscOmp(pi) {
   try {
     const bridge = await import('../../../.rsc/omp-bridge.mjs');
-    return await bridge.default(pi);
+    // Resolve OMP's package from its discovered extension entry, not from a detached .rsc import.
+    const registry = await import('@oh-my-pi/pi-coding-agent/config/registry').catch(() => null);
+    return await bridge.default(pi, registry);
   } catch {
     // No harness here, or it was purged: nothing to enforce and nothing to say.
   }
@@ -83,7 +85,9 @@ export default async function rscOmpUser(pi) {
     // handler twice.
     if (cwd === root) return;
     const bridge = await import(pathToFileURL(join(root, '.rsc', 'omp-bridge.mjs')).href);
-    return await bridge.default(pi);
+    // Resolve OMP's package from its discovered extension entry, not from a detached .rsc import.
+    const registry = await import('@oh-my-pi/pi-coding-agent/config/registry').catch(() => null);
+    return await bridge.default(pi, registry);
   } catch {
     // No harness, no bridge, or an unreadable project: stay silent, like the project loader.
   }
@@ -108,7 +112,7 @@ export function ompAgentDir(env = process.env) {
     return join(home, configDir, 'profiles', profile, 'agent');
   }
   const value = String(env.PI_CODING_AGENT_DIR || '').trim();
-  return value ? value : join(home, configDir, 'agent');
+  return value ? resolve(value) : join(home, configDir, 'agent');
 }
 
 export function ompUserLoaderPath(env = process.env) {
@@ -127,7 +131,7 @@ export function wireOmpUserLoader(env = process.env) {
     if (existsSync(path) && !readFileSync(path, 'utf8').includes(OMP_USER_LOADER_MARKER)) {
       return { mode: 'manual', reason: 'loader-collision', path };
     }
-  } catch { /* unreadable is treated as ours to write */ }
+  } catch { return { mode: 'manual', reason: 'loader-unreadable', path }; }
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, USER_LOADER_SOURCE);
   return { mode: 'wired', path };
@@ -167,9 +171,12 @@ export function ompPluginsRoot(env = process.env) {
     && profile !== '.' && profile !== '..' && !profile.endsWith('.');
   const suffix = named ? ['profiles', profile] : [];
   const normal = join(home, configName, ...suffix);
-  // An explicitly overridden agent dir only affects the default profile's
-  // agent hooks, not the plugin registry. XDG data is opt-in on migration.
-  const xdg = env.XDG_DATA_HOME ? join(env.XDG_DATA_HOME, 'omp', ...suffix) : null;
+  // The default profile uses the legacy data root with a custom agent directory.
+  // Named profiles use XDG only after their own profile directory has migrated.
+  const useXdg = ['linux', 'darwin'].includes(process.platform)
+    && (named || !String(env.PI_CODING_AGENT_DIR ?? '').trim()
+      || resolve(env.PI_CODING_AGENT_DIR) === join(normal, 'agent'));
+  const xdg = useXdg && env.XDG_DATA_HOME ? join(env.XDG_DATA_HOME, 'omp', ...suffix) : null;
   return join(xdg && existsSync(xdg) ? xdg : normal, 'plugins');
 }
 
@@ -297,7 +304,7 @@ export function wireOmpBridge(cwd = process.cwd(), policy = {}) {
   // trunk-policy is shared with knowledge sync: never remove it here. hook-once is shared with
   // Claude's session-start; risk-policy is shared with Claude's reaper and session-start. Same
   // reason: a narrower OMP plan must not delete a sibling the other target still imports.
-  const keepShared = new Set(['trunk-policy.mjs', 'hook-once.mjs', 'risk-policy.mjs']);
+  const keepShared = new Set(['trunk-policy.mjs', 'hook-once.mjs', 'risk-policy.mjs', 'emoji-policy.mjs']);
   for (const name of new Set(disabled.filter((name) => !keepShared.has(name)))) {
     if (wanted.has(name)) continue;
     const file = join(rsc, name);
@@ -305,7 +312,10 @@ export function wireOmpBridge(cwd = process.cwd(), policy = {}) {
   }
 
   const loader = join(cwd, ...OMP_LOADER.split('/'));
-  if (!existsSync(loader) || !ours(loader)) {
+  if (existsSync(loader) && !ours(loader)) {
+    return { mode: 'manual', reason: 'loader-collision', paths: ompBridgeManagedPaths({ cwd, policy }), removed };
+  }
+  if (!existsSync(loader) || readFileSync(loader, 'utf8') !== LOADER_SOURCE) {
     mkdirSync(dirname(loader), { recursive: true });
     writeFileSync(loader, LOADER_SOURCE);
   }

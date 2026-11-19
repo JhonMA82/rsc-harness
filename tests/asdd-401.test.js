@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, realpathSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { tmpdir } from './helpers/scratch.js';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -252,4 +252,16 @@ test('task-brief: a row inside its own heading block is printed once', () => {
   assert.equal(text.split('| T1 | dup |').length - 1, 1, text);
   assert.equal(text.split('| ID | Task |').length - 1, 1, text);
   assert.match(text, /after/);
+});
+
+test('task-brief: its awk uses no regex intervals, which mawk does not read', () => {
+  assert.doesNotMatch(readFileSync(BRIEF, 'utf8'), /\{\d+,\d*\}/);
+});
+
+test('task-brief: its single-quoted awk program has no stray quote that would end it early', () => {
+  const src = readFileSync(BRIEF, 'utf8');
+  const start = src.indexOf("awk -v n=\"$N\" '") + "awk -v n=\"$N\" '".length;
+  const end = src.indexOf("' \"$PLAN_FILE\"", start);
+  assert.ok(start > 0 && end > start, 'awk program not located');
+  assert.doesNotMatch(src.slice(start, end), /'/);
 });

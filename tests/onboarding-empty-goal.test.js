@@ -57,6 +57,8 @@ test('onboard re-asks an empty goal before the assistant picker, and does not ca
     p.stdin.write('\r');                                   // empty goal
     await waitFor('A goal is required');
     p.stdin.write('Build a demo\r');
+    await waitFor('Emoji in replies, commits and rsc messages?');
+    p.stdin.write('\r');                                   // accept the default emoji preference
     await waitFor('Which assistants do you want to install for?');
     p.stdin.write(' \r');                                  // toggle the detected assistant and confirm
     await waitFor('Accept this exact harness plan?');

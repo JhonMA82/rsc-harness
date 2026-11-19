@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { tmpdir } from './helpers/scratch.js';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -83,4 +83,13 @@ test('a merge aimed at a checkout that is on the trunk still counts as landing t
   sh(root, 'worktree', 'add', '-q', '--detach', trunk);
   sh(trunk, 'switch', '-q', 'main');
   assert.match(decide(root, `git -C ${trunk} merge feat/orden`) ?? '', /not pushed/);
+});
+
+test("rsc's own docs(auto) commits without emoji are not the person's unpushed work either", () => {
+  const root = clone();
+  commit(root, 'k1.md', 'docs(auto): sync desde rsc/knowledge');
+  commit(root, 'k2.md', 'docs(auto): notes [skip ci]');
+  assert.equal(decide(root, 'git switch main'), null, 'only rsc knowledge commits are ahead');
+  commit(root, 'c.txt', 'feat: the person\'s work');
+  assert.match(decide(root, 'git switch main') ?? '', /1 commit\(s\) not pushed/);
 });

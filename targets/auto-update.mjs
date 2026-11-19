@@ -180,6 +180,9 @@ export async function updateNotice(root, env = process.env) {
     // A background update that finished since the last session: say so once, then keep quiet.
     const prior = readAutoState(root);
     const targets = declaredTargets(root);
+    // Another target's session-start can reach this updater in a mixed OMP project.
+    // Keep its fork-specific integration on the installed distribution by default.
+    if (targets.includes('omp') && env.RSC_OMP_ALLOW_UPSTREAM_AUTO_UPDATE !== '1') return '';
     if (prior && !prior.reported && SEMVER_ONLY.test(String(prior.to)) && !isNewer(prior.to, installed)) {
       say(`
 ===== rsc updated =====

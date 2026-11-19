@@ -182,7 +182,14 @@ export async function updateNotice(root, env = process.env) {
     const targets = declaredTargets(root);
     // Another target's session-start can reach this updater in a mixed OMP project.
     // Keep its fork-specific integration on the installed distribution by default.
-    if (targets.includes('omp') && env.RSC_OMP_ALLOW_UPSTREAM_AUTO_UPDATE !== '1') return '';
+    const distribution = (() => {
+      try { return JSON.parse(readFileSync(join(root, '.rsc.json'), 'utf8')).rscDistribution; }
+      catch { return undefined; }
+    })();
+    const omp = targets.includes('omp');
+    const permitsUpstream = env.RSC_ALLOW_UPSTREAM_UPDATE === '1'
+      || (omp && env.RSC_OMP_ALLOW_UPSTREAM_AUTO_UPDATE === '1');
+    if ((distribution === 'github:JhonMA82/rsc-harness' || omp) && !permitsUpstream) return '';
     if (prior && !prior.reported && SEMVER_ONLY.test(String(prior.to)) && !isNewer(prior.to, installed)) {
       say(`
 ===== rsc updated =====

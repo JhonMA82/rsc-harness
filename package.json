@@ -1,6 +1,7 @@
 {
   "name": "@ericrisco/rsc",
   "version": "4.2.0",
+  "rscDistribution": "github:JhonMA82/rsc-harness",
   "description": "A guided harness builder that turns your goal into a minimal, verified AI-agent setup using strict best practices.",
   "type": "module",
   "bin": {
@@ -60,7 +61,7 @@
   "homepage": "https://github.com/ericrisco/rsc-harness#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ericrisco/rsc-harness.git"
+    "url": "git+https://github.com/JhonMA82/rsc-harness.git"
   },
   "bugs": {
     "url": "https://github.com/ericrisco/rsc-harness/issues"

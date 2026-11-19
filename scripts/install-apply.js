@@ -5,7 +5,7 @@ import { join, dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { planInstall } from './install-plan.js';
-import { installedCli, materializeCliInstructions } from './lib/cli-invocation.js';
+import { activeCli, forkCliCommand, forkProject, materializeCliInstructions } from './lib/cli-invocation.js';
 import { targetPaths, writeSkill, wireHook, unwireHook, baseDir, TARGET_IDS } from '../targets/index.js';
 import { shadowTarget } from '../targets/agents-md-shadow.js';
 import {
@@ -90,8 +90,8 @@ function legacyOpenCodeSkillPath(target, cwd, id) {
 // overwriting on a version change is safe. Mutates `baseVersions` with the new mark.
 function ensureBase(id, cwd, baseVersions) {
   const dest = baseDir(id, cwd);
-  const local = installedCli();
-  const stamp = `${CLI_VERSION}:${local ? 'rsc' : 'npx'}`;
+  const local = forkCliCommand();
+  const stamp = `${CLI_VERSION}:${local}`;
   const stale = baseVersions[id] !== stamp;
   if (stale && existsSync(dest)) rmSync(dest, { recursive: true, force: true });
   if (!existsSync(dest)) {
@@ -271,6 +271,7 @@ export function recordInManifest({ cwd, target, skillIds, agentIds = [], catalog
     agents: union(prev.agents, agentIds),
     ownSkills: prev.ownSkills || [],
     catalogVersion,
+    rscDistribution: activeCli()?.distribution,
     tier: tier ?? prev.tier ?? null,
     optOuts: preserveOptOuts ? union(projectOptOuts(prev.optOuts), optOuts).filter(name => !rearmOptOuts.includes(name)) : optOuts ?? projectOptOuts(prev.optOuts),
     memory: prev.memory,
@@ -289,7 +290,11 @@ export async function applyInstall({ skillIds = [], agentIds = [], target, home,
   const fromScratch = !existsSync(join(cwd, '.rsc'));
   // Git permissions are on for a project adopted from scratch (no manifest yet); an older project
   // keeps what it declared, and absent means "never decided": nothing is added or removed there.
-  const declaredGit = readManifest(cwd)?.gitPermissions;
+  const declaration = readManifest(cwd);
+  if (forkProject(declaration) && activeCli()?.distribution !== 'github:JhonMA82/rsc-harness') {
+    throw new Error('This project requires the RSC fork. Run sync with a reviewed JhonMA82/rsc-harness checkout or tarball.');
+  }
+  const declaredGit = declaration?.gitPermissions;
   const newProject = !existsSync(join(cwd, '.rsc.json'));
   const gitPermissions = newProject ? true : declaredGit;
   const paths = targetPaths(target, home, cwd);

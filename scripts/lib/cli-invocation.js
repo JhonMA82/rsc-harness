@@ -1,9 +1,38 @@
-import { accessSync, constants, statSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
-import { join, isAbsolute } from 'node:path';
+import { accessSync, constants, statSync, realpathSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
+import { dirname, join, isAbsolute, resolve } from 'node:path';
+
+import { fileURLToPath } from 'node:url';
+
+const ENTRY = fileURLToPath(new URL('../rsc.js', import.meta.url));
+const FORK = 'github:JhonMA82/rsc-harness';
+
+function packageOrigin(entry) {
+  try {
+    const actual = realpathSync(entry);
+    const root = dirname(dirname(actual));
+    const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+    if (pkg.name !== '@ericrisco/rsc' || typeof pkg.bin?.rsc !== 'string'
+        || realpathSync(resolve(root, pkg.bin.rsc)) !== actual) return null;
+    const distribution = pkg.rscDistribution === FORK
+      && pkg.repository?.url === 'git+https://github.com/JhonMA82/rsc-harness.git'
+      ? FORK : pkg.repository?.url === 'git+https://github.com/ericrisco/rsc-harness.git'
+        ? 'npm:@ericrisco/rsc' : 'unknown';
+    return { entry: actual, distribution, version: pkg.version, repository: pkg.repository?.url };
+  } catch { return null; }
+}
+
+export const activeCli = () => packageOrigin(ENTRY);
+export const forkProject = manifest => Boolean(manifest?.rscDistribution === FORK || manifest?.targets?.includes('omp'));
+
+export function forkCliCommand() {
+  // Render an explicit entry so an alias, shim or changing PATH cannot select another package.
+  if (process.platform === 'win32') return `node '${ENTRY.replaceAll("'", "''")}'`;
+  return `node '${ENTRY.replaceAll("'", "'\\''")}'`;
+}
 
 // Inspect PATH, never execute a candidate just to discover it. Ignore relative PATH
 // entries: a checked-out executable is not evidence of an installed CLI.
-export function installedCli({ env = process.env, platform = process.platform } = {}) {
+export function pathCli({ env = process.env, platform = process.platform } = {}) {
   const windows = platform === 'win32';
   const names = windows ? ['rsc.exe', 'rsc.cmd', 'rsc.bat', 'rsc'] : ['rsc'];
   for (const dir of (env.PATH || env.Path || '').split(windows ? ';' : ':')) {
@@ -16,16 +45,26 @@ export function installedCli({ env = process.env, platform = process.platform } 
         const file = join(dir, name);
         if (!statSync(file).isFile()) continue;
         accessSync(file, windows ? constants.F_OK : constants.X_OK);
-        return true;
+        const origin = packageOrigin(file);
+        return { path: file, ...(origin ?? { distribution: 'unknown' }) };
       } catch { /* absent, unreadable or not executable */ }
     }
   }
-  return false;
+  return null;
 }
 
-export function cliInstructions(text, local = installedCli()) {
-  // Explicit versions (including @latest) are deliberate choices, never rewritten.
-  return local ? text.replace(/\bnpx[ \t]+(?:-y[ \t]+)?@ericrisco\/rsc(?=[ \t`\n]|$)/g, 'rsc') : text;
+export function installedCli(options) {
+  const candidate = pathCli(options);
+  const active = activeCli();
+  return Boolean(candidate && active && candidate.distribution === active.distribution && candidate.version === active.version);
+}
+
+export function cliInstructions(text, local = forkCliCommand()) {
+  if (typeof local === 'string') {
+    // These are generated recovery instructions, where a public version pin would select upstream.
+    text = text.replace(/\bnpx[ \t]+(?:-y[ \t]+)?@ericrisco\/rsc@[^ \t`\n]+(?=[ \t]+(?:sync|doctor|repair|onboard|upgrade)\b)/g, () => local);
+  }
+  return local ? text.replace(/\bnpx[ \t]+(?:-y[ \t]+)?@ericrisco\/rsc(?=[ \t`\n]|$)/g, () => typeof local === 'string' ? local : 'rsc') : text;
 }
 
 export function materializeCliInstructions(dir, local) {
@@ -35,8 +74,8 @@ export function materializeCliInstructions(dir, local) {
     else if (entry.isFile() && entry.name.endsWith('.md')) {
       const before = readFileSync(file, 'utf8');
       let after = cliInstructions(before, local);
-      if (local && entry.name === 'SKILL.md' && /\nname: suggest\n/.test(before)) {
-        after += '\n**Installed CLI.** Use `rsc` for unversioned `npx @ericrisco/rsc` commands, including commands suggested by hooks. Explicit package versions stay pinned. If `rsc` disappears from PATH, run sync with the declared package version to refresh these instructions. This does not grant execution permissions.\n';
+      if (typeof local === 'string' && entry.name === 'SKILL.md' && /\nname: suggest\n/.test(before)) {
+        after += '\n**RSC fork.** Use the installed fork entry shown in these instructions for sync, doctor and recovery. A version on the public npm package does not identify the fork. See the fork README for worktree setup.\n';
       }
       if (after !== before) writeFileSync(file, after);
     }

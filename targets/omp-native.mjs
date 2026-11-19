@@ -100,10 +100,17 @@ export function guardVerdict(error, stdout, critical = false) {
   const raw = String(stdout ?? '').trim();
   if (!raw) return null; // A successful guard with no output means no objection.
   try {
-    const parsed = JSON.parse(raw)?.hookSpecificOutput;
-    if (parsed?.permissionDecision === 'allow') return null;
-    if (parsed?.permissionDecision === 'ask' || parsed?.permissionDecision === 'deny')
-      return { decision: parsed.permissionDecision, reason: parsed.permissionDecisionReason || 'rsc guard denied this command.' };
+    const body = JSON.parse(raw);
+    const parsed = body?.hookSpecificOutput;
+    const message = typeof body?.systemMessage === 'string' ? body.systemMessage.trim() : '';
+    if (parsed?.permissionDecision === 'allow' || (!Object.hasOwn(body ?? {}, 'hookSpecificOutput') && message)) {
+      return message ? { decision: 'allow', message } : null;
+    }
+    if (parsed?.permissionDecision === 'ask' || parsed?.permissionDecision === 'deny') {
+      return { decision: parsed.permissionDecision,
+        reason: parsed.permissionDecisionReason || 'rsc guard denied this command.',
+        ...(message ? { message } : {}) };
+    }
   } catch { /* invalid output */ }
   return critical ? { decision: 'deny', reason: 'rsc critical guard returned an invalid decision; command denied.' } : null;
 }
@@ -125,7 +132,7 @@ export function nativeGuidance(ctx, pi, fallbackModes = null, native = null, { w
   const effective = native?.effective || {};
   const lines = [];
   if (modes?.plan === 'active')
-    lines.push('OMP Plan is ACTIVE: read/research/plan only; no edits, exec mutations, native /commit or implementation subagent until Plan is exited and rsc approval exists.');
+    lines.push('OMP Plan is ACTIVE: use native read tools and the session-local plan draft and review. Workspace edits, shell execution, native /commit and implementation workers require exiting Plan and the relevant approval.');
   // Native tools already understand their schemas. Tell the model WHEN to use them, not how to fake them.
   // The effective values win: guidance must never contradict an explicit operator setting.
   if (Array.isArray(tools) && tools.includes('task')) {
@@ -176,6 +183,7 @@ export function nativeStatus(pi, lookup, ctx, root) {
   if (process.env.RSC_OMP_STRICT_EXEC === '1') notes.push('RSC strict exec: eval tool calls are blocked; this is not a filesystem or process sandbox');
   return {
     ...values,
+    registryAvailable: typeof lookup === 'function' && Boolean(scope),
     modes,
     notes,
     guardFiles: ['danger-guard.mjs','ship-guard.mjs'].map(name=>({ name, present: existsSync(join(root,'.rsc',name)) })),

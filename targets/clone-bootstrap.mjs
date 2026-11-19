@@ -107,6 +107,7 @@ export function readManifest(root) {
     // Same reasoning, and it matters more here: this string is pasted into the command we tell a
     // person to run *exactly*. A version, or nothing — "no version pinned" is a true and harmless
     // thing to say, and it is what an unusable value becomes.
+    forkRequired: parsed.rscDistribution === 'github:JhonMA82/rsc-harness' || ids(parsed.targets).includes('omp'),
     catalogVersion: SEMVER.test(String(parsed.catalogVersion ?? '')) ? parsed.catalogVersion : null,
     targets: Array.isArray(parsed.targets) ? parsed.targets : [],
     // Same allowlist, same reason, and it bites harder here: these names are pasted into the
@@ -178,6 +179,7 @@ function localTier(root) {
  * that installs would be a promise nothing keeps.
  */
 export function composeDivergence(manifest, evaluation) {
+  if (manifest.forkRequired) return 'Use the verified JhonMA82/rsc-harness checkout or tarball for sync. The public npm package is upstream.';
   const version = safeVersion(manifest.catalogVersion);
   const command = version ? `npx ${PACKAGE}@${version} sync` : `npx ${PACKAGE} sync`;
   let text =
@@ -236,6 +238,10 @@ export function composeOffer(manifest) {
   // resolves to the latest published package, so an offer phrased that way hands a clone whatever
   // shipped since — the exact divergence the pin exists to prevent, introduced by the feature meant
   // to honour it. Pinned, the command is reproducible three months from now (spec AC#6).
+  if (manifest.forkRequired) return {
+    offers: false,
+    text: 'This checkout requires the JhonMA82/rsc-harness distribution. Use a reviewed fork checkout or tarball and run its sync from this checkout. The public npm package is upstream.\n',
+  };
   const version = safeVersion(manifest.catalogVersion);
   const pin = version ? `${PACKAGE}@${version}` : `${PACKAGE} (no version pinned)`;
   const command = version ? `npx ${PACKAGE}@${version} sync` : `npx ${PACKAGE} sync`;
@@ -378,7 +384,7 @@ function remindOnProtectedAction(root) {
       additionalContext:
         `rsc: you are about to ${hit.what}, and this project's checks for that are not built on ` +
         'this machine. Nothing is blocked, and this is the last time it will be mentioned. ' +
-        `To build them: npx ${PACKAGE}${pin} sync`,
+        (manifest.forkRequired ? 'To build them: run sync using the verified fork checkout or tarball.' : `To build them: npx ${PACKAGE}${pin} sync`),
     },
   }));
 }

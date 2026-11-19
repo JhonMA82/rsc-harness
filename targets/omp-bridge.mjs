@@ -31,7 +31,7 @@ const nativeModeState = (ctx, fallback = null) => (native?.nativeModeState
   ? native.nativeModeState(ctx, fallback) : modeFromContext(ctx, fallback));
 // OMP's Plan subagent allow-list plus the main-session question, task and todo controls.
 const PLAN_TOOLS = new Set(['read', 'grep', 'glob', 'web_search', 'ast_grep', 'ask', 'todo', 'task']);
-const PLAN_LINE = '- OMP Plan is ACTIVE: read/research/plan only; no edits, exec mutations, native /commit or implementation subagent until Plan is exited and rsc approval exists.';
+const PLAN_LINE = '- OMP Plan is ACTIVE: use native read tools and the session-local plan draft and review. Workspace edits, shell execution, native /commit and implementation workers require exiting Plan and the relevant approval.';
 const nativeGuidance = (ctx, pi, modes = null, applied = null, options = {}) => {
   if (native?.nativeGuidance) return native.nativeGuidance(ctx, pi, modes, applied, options);
   // Without the native module the Plan block still has to hold: it is the one gate that needs no
@@ -54,10 +54,16 @@ function guardVerdict(error, stdout, critical = false) {
   const raw = String(stdout ?? '').trim();
   if (!raw) return null;
   try {
-    const parsed = JSON.parse(raw)?.hookSpecificOutput;
-    if (parsed?.permissionDecision === 'allow') return null;
+    const body = JSON.parse(raw);
+    const parsed = body?.hookSpecificOutput;
+    const message = typeof body?.systemMessage === 'string' ? body.systemMessage.trim() : '';
+    if (parsed?.permissionDecision === 'allow' || (!Object.hasOwn(body ?? {}, 'hookSpecificOutput') && message)) {
+      return message ? { decision: 'allow', message } : null;
+    }
     if (parsed?.permissionDecision === 'ask' || parsed?.permissionDecision === 'deny') {
-      return { decision: parsed.permissionDecision, reason: parsed.permissionDecisionReason || 'rsc guard denied this command.' };
+      return { decision: parsed.permissionDecision,
+        reason: parsed.permissionDecisionReason || 'rsc guard denied this command.',
+        ...(message ? { message } : {}) };
     }
   } catch { /* invalid output */ }
   return critical
@@ -295,7 +301,7 @@ function runGuard(guard, payload, executionCwd) {
         env: { ...process.env, RSC_OMP: '1' },
       }, (error, stdout) => {
         const verdict = guardVerdict(error, stdout, critical);
-        if (critical && (error || verdict?.reason.startsWith('rsc critical guard returned'))) {
+        if (critical && (error || verdict?.reason?.startsWith('rsc critical guard returned'))) {
           done(failed(verdict.reason));
         } else {
           done(verdict);
@@ -449,7 +455,7 @@ export default async function rscOmp(pi, hostRegistry) {
   };
 
   // Opt-in OMP transcript presenters are display-only: never suppress tool errors or policy denials.
-  if (typeof pi?.registerTranscriptPresenter === 'function') {
+  if (process.env.RSC_OMP_COMPACT_TOOL_CARDS === '1' && typeof pi?.registerTranscriptPresenter === 'function') {
     pi.registerTranscriptPresenter(block => {
       if (block?.type !== 'toolCall' || block.isError || block.isPartial) return undefined;
       if (block.toolName === 'task' || block.toolName === 'todo') return 'compact';
@@ -472,7 +478,10 @@ export default async function rscOmp(pi, hostRegistry) {
         }
         const applied = state.native;
         const cwd = resolve(ctx?.cwd || ROOT);
-        const status = await liveNativeStatus(pi, ctx, projectOf(cwd), hostRegistry);
+        const project = projectOf(cwd);
+        const status = await liveNativeStatus(pi, ctx, project, hostRegistry);
+        const receipt = readJson(join(project, '.rsc.json'));
+        const active = pi?.getActiveTools?.() ?? [];
         const settings = ['task.steps','task.autoParallel','todo.eager','todo.midRunNudges','commit.enabled','session.worktreeScope','memory.backend']
           .map(k => k+'='+String(status[k]))
           .concat('tools.approval.eval='+String(status['tools.approval']?.eval));
@@ -481,7 +490,14 @@ export default async function rscOmp(pi, hostRegistry) {
         }
         const lines = [
           'rsc/OMP native',
+          'RSC distribution: '+ (receipt?.rscDistribution === 'github:JhonMA82/rsc-harness'
+            ? 'github:JhonMA82/rsc-harness' : 'unrecorded; use the fork CLI provenance command'),
+          'Settings registry: '+ (status.registryAvailable ? 'available' : 'unavailable'),
+          'Native tools: '+ ['task', 'todo', 'ask'].map(name => name+':'+(active.includes(name) ? 'active' : 'inactive')).join(', '),
+          'Plugin features: '+ Object.entries(switches).map(([key, value]) => key+':'+(value ? 'on' : 'off')).join(', '),
+          'RSC memory: '+ (switches.memory && mods.memory ? 'adapter available' : 'off or unavailable'),
           'Settings: '+ settings.join(', '),
+          'Bridge defaults applied: '+ applied.applied.join(', '),
           'Preserved: '+ applied.preserved.join(', '),
           'Warnings: '+ [...applied.warnings,...status.notes].join('; '),
           'Plan mode: '+ String(nativeModeState(ctx)?.plan || 'unknown'),
@@ -534,7 +550,7 @@ export default async function rscOmp(pi, hostRegistry) {
       // This target extends an upstream npm package. A same-major automatic update from
       // @ericrisco/rsc can overwrite custom target-only code even if it recognizes 'omp'.
       // Opt-in after compatibility audit; keep normal updates for other targets unchanged.
-      if (switches.update && !process.env.RSC_NO_UPDATE_CHECK && process.env.RSC_OMP_ALLOW_UPSTREAM_AUTO_UPDATE === '1' && mods.update?.updateNotice) {
+      if (switches.update && !process.env.RSC_NO_UPDATE_CHECK && (process.env.RSC_OMP_ALLOW_UPSTREAM_AUTO_UPDATE === '1' || process.env.RSC_ALLOW_UPSTREAM_UPDATE === '1') && mods.update?.updateNotice) {
         state.update = Promise.resolve()
           .then(() => mods.update.updateNotice(project))
           .then((notice) => String(notice || '').trim())
@@ -640,8 +656,16 @@ export default async function rscOmp(pi, hostRegistry) {
       const toolName = event?.toolName;
       const planTool = plan ? pi?.getAllTools?.().find(tool => tool.name === toolName) : null;
       const source = planTool?.sourceInfo;
-      if (plan && (!PLAN_TOOLS.has(toolName) || planTool?.mcpServerName
-          || (source && (source.source !== 'builtin' || (source.path && source.path !== `<builtin:${toolName}>`))))) {
+      const isBuiltin = source?.source === 'builtin' && (!source.path || source.path === `<builtin:${toolName}>`)
+        && !planTool?.mcpServerName;
+      // OMP 19 writes drafts to its session sandbox and uses this exact endpoint to request
+      // native review. Its write tool validates sandbox containment before writing.
+      const destination = event?.input?.path;
+      const planWrite = toolName === 'write' && isBuiltin && typeof destination === 'string'
+        && (destination === 'xd://propose' || /^local:\/\/(?:PLAN|[a-z0-9_-]+-plan)\.md$/i.test(destination));
+      const planRead = PLAN_TOOLS.has(toolName)
+        && (typeof pi?.getAllTools !== 'function' || isBuiltin);
+      if (plan && !planRead && !planWrite) {
         return { block: true, reason: `rsc: ${event.toolName} cannot mutate the workspace while OMP Plan mode is active. Exit Plan and obtain the accepted rsc approval first.` };
       }
       // Strict execution is opt-in: arbitrary JS eval can spawn shell commands
@@ -671,16 +695,21 @@ export default async function rscOmp(pi, hostRegistry) {
       if (ship.enabled && ship.present && await needsDeliveryApproval(policyRoot, command)) {
         verdicts.push({ decision: 'ask', reason: 'rsc: confirm publishing or merging this change.' });
       }
+      const notices = [...new Set(verdicts.flatMap(verdict => verdict?.message ? [verdict.message] : []))];
+      for (const notice of notices) {
+        try { ctx?.ui?.notify?.(notice, 'info'); } catch { /* delivery has no bearing on authorization */ }
+      }
       const denial = verdicts.find(verdict => verdict?.decision === 'deny');
       if (denial) return { block: true, reason: denial.reason };
       const approvals = verdicts.filter(verdict => verdict?.decision === 'ask');
-      if (!approvals.length) return;
+      const information = notices.length ? { additionalContext: notices.join('\n') } : undefined;
+      if (!approvals.length) return information;
       const reason = approvals.map(verdict => verdict.reason).join('\n');
       if (isMain(ctx) && ctx?.hasUI) {
         if (hostAutoApproves(hostRegistry ?? await loadSettingsRegistry(), pi?.pi?.settings)) {
           return { block: true, reason: `${reason}\n\n${HOST_AUTO_APPROVES}` };
         }
-        if (await askPerson(ctx, `${reason}\n\nWorking directory: ${executionCwd}\nCommand: ${command}`)) return;
+        if (await askPerson(ctx, `${reason}\n\nWorking directory: ${executionCwd}\nCommand: ${command}`)) return information;
       }
       return {
         block: true,

@@ -17,6 +17,7 @@ import { refreshRegistry, registryStatus } from './lib/registry.js';
 import { audit, writeAuditReport, recordAuditBaseline } from './audit.js';
 import { DOMAINS } from './lib/domains.js';
 import { listBackups, restoreBackup, whereKept } from './lib/backups.js';
+import { activeCli, forkProject, pathCli } from './lib/cli-invocation.js';
 import { runUpgrade } from './lib/upgrade.js';
 import { diagnose, repair } from './lib/repair.js';
 import { DEFAULT_SKILL_FLOOR, withDefaultSkillFloor } from './lib/default-skill-floor.js';
@@ -80,7 +81,7 @@ const PURGE_HELP = [
 const GLOBAL_VALUE_FLAGS = new Set([
   '--topic', '--target', '--technical-level', '--accompaniment', '--project-kind', '--goal', '--goal-base64', '--software-scope', '--workflow', '--emoji', '--accept-plan',
 ]);
-const COMMANDS = new Set(['ingest', 'copy', 'onboard', 'reassess', 'add', 'install', 'consult', 'catalog', 'audit', 'list', 'doctor', 'memory', 'knowledge-sync', 'git-permissions', 'agent-model', 'agents', 'emoji', 'main', 'isolation', 'sync', 'backups', 'restore', 'upgrade', 'registry', 'worktrees', 'capabilities', 'review', 'risk', 'spec', 'sello', 'repair', 'uninstall', 'purge']);
+const COMMANDS = new Set(['provenance', 'ingest', 'copy', 'onboard', 'reassess', 'add', 'install', 'consult', 'catalog', 'audit', 'list', 'doctor', 'memory', 'knowledge-sync', 'git-permissions', 'agent-model', 'agents', 'emoji', 'main', 'isolation', 'sync', 'backups', 'restore', 'upgrade', 'registry', 'worktrees', 'capabilities', 'review', 'risk', 'spec', 'sello', 'repair', 'uninstall', 'purge']);
 // Sync preserves project decisions. Only these explicit transitions clear an opt-out;
 // a missing local marker alone does not revoke a teammate's declared decision.
 const EXPLICIT_REARMS = {
@@ -800,6 +801,14 @@ async function main() {
   // One resolution for every command, doctor included: `doctor` used to resolve on its
   // own and could report a different assistant than the one just installed into.
   // --target accepts one id or a comma list (e.g. --target claude,codex).
+  if (cmd === 'provenance') {
+    const active = activeCli();
+    const declared = readManifest();
+    say(JSON.stringify({ active, pathCandidate: pathCli(), declared: declared?.rscDistribution,
+      compatible: Boolean(active?.distribution === 'github:JhonMA82/rsc-harness'
+        && (!declared?.catalogVersion || declared.catalogVersion === active.version)) }, null, 2));
+    return;
+  }
   const f = flag('target');
   const resolved = resolveTargets({ flagValue: typeof f === 'string' ? f : undefined });
   let targets = resolved.ids;
@@ -938,6 +947,13 @@ async function main() {
     }
     case 'doctor': {
       const report = doctor({ target });
+      const active = activeCli();
+      const candidate = pathCli();
+      report.cli = {
+        active, pathCandidate: candidate, declared: readManifest()?.rscDistribution,
+        ...(!candidate || candidate.distribution !== active?.distribution || candidate.version !== active?.version
+          ? { action: 'Use the fork CLI entry reported in active.entry. The rsc command on PATH is missing or could select another distribution or version.' } : {}),
+      };
       // #277 — an automation on top of rsc reads the exit code, not the prose.
       if (!report.healthy) process.exitCode = 1;
       if (argv.includes('--json')) return void say(JSON.stringify(report, null, 2));
@@ -1236,6 +1252,10 @@ async function main() {
     case 'upgrade': {
       const dry = argv.includes('--dry-run');
       const global = argv.includes('--global');
+      if ((forkProject(readManifest()) || activeCli()?.distribution === 'github:JhonMA82/rsc-harness') && !argv.includes('--upstream')) {
+        if (global && !dry) throw new Error('This project uses the RSC fork. Install a reviewed fork checkout or tarball and then run its sync. Use --upstream only to choose the public package explicitly.');
+        return void say('Upgrade guide: install a reviewed fork checkout or tarball, then run sync using its CLI. The public npm package is an explicit --upstream choice.');
+      }
       const result = runUpgrade({ targets, dryRun: dry, global });
       if (result.ran) say('Upgraded global @ericrisco/rsc. Restart your shell if needed.');
       else say(`${dry ? 'Would run' : 'Upgrade guide'}: ${result.plan.installCommand}`);

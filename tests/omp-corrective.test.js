@@ -73,11 +73,19 @@ test('Plan checks tool provenance and rejects custom and MCP mutations', async t
   const { root } = fixture(t);
   const tools = [
     { name: 'glob', sourceInfo: { source: 'builtin' } },
+    { name: 'write', sourceInfo: { source: 'builtin', path: '<builtin:write>' } },
     { name: 'read', sourceInfo: { source: 'extension' } },
   ];
   const call = (await load(root, { getAllTools: () => tools })).get('tool_call');
   const ctx = { cwd: root, sessionModes: { getState: () => ({ plan: 'active' }) } };
   assert.equal(await call({ toolName: 'glob' }, ctx), undefined);
+  for (const path of ['local://rsc-plan.md', 'xd://propose']) {
+    assert.equal(await call({ toolName: 'write', input: { path } }, ctx), undefined);
+  }
+  for (const path of ['src/rsc.js', 'local://../rsc-plan.md', 'proc://agent/kill', 'xd://other']) {
+    assert.equal((await call({ toolName: 'write', input: { path } }, ctx))?.block, true, path);
+  }
+  assert.equal((await call({ toolName: 'task' }, ctx))?.block, true, 'no runtime provenance for a missing registry entry');
   for (const toolName of ['read', 'apply_patch', 'mcp__storage_delete']) {
     assert.equal((await call({ toolName }, ctx))?.block, true, toolName);
   }
@@ -179,4 +187,18 @@ test('The launch directory can specialize project plugin settings', async t => {
   const switches = readPluginSwitches({ HOME: root }, root, subdir);
   assert.equal(switches.guards, true);
   assert.equal(switches.native, false);
+});
+
+test('ship notices reach the operator and agent without turning a denial into permission', async t => {
+  const { root } = fixture(t);
+  const call = (await load(root)).get('tool_call');
+  const notices = [];
+  const ctx = { cwd: root, ui: { notify: message => notices.push(message) } };
+  const script = join(root, '.rsc', 'ship-guard.mjs');
+  writeFileSync(script, 'console.log(JSON.stringify({ systemMessage: "Branch parked" }));');
+  assert.deepEqual(await call(bash('git status'), ctx), { additionalContext: 'Branch parked' });
+  assert.deepEqual(notices, ['Branch parked']);
+  writeFileSync(script, 'console.log(JSON.stringify({ systemMessage: "Recovery", hookSpecificOutput: { permissionDecision: "deny", permissionDecisionReason: "Denied" } }));');
+  assert.deepEqual(await call(bash('git status'), ctx), { block: true, reason: 'Denied' });
+  assert.deepEqual(notices, ['Branch parked', 'Recovery']);
 });

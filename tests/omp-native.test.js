@@ -239,7 +239,13 @@ test('A crashing critical guard blocks, including ship, and an optional crash al
   }
 });
 
-test('The presenter compacts only finished cards and the status command answers',async()=>{
+test('The presenter compacts only finished cards and the status command answers',async(t)=>{
+  const prior = process.env.RSC_OMP_COMPACT_TOOL_CARDS;
+  process.env.RSC_OMP_COMPACT_TOOL_CARDS = '1';
+  t.after(() => {
+    if (prior === undefined) delete process.env.RSC_OMP_COMPACT_TOOL_CARDS;
+    else process.env.RSC_OMP_COMPACT_TOOL_CARDS = prior;
+  });
   const project=mkdtempSync(join(tmpdir(),'omp-status-cmd-'));
   try {
     writeFileSync(join(project,'.rsc.json'),'{}');
@@ -265,5 +271,24 @@ test('The presenter compacts only finished cards and the status command answers'
     assert.match(notified.text,/tools\.approval\.eval=/,'the documented validation value is printed');
     assert.match(notified.text,/session\.worktreeScope=directory/);
     assert.match(notified.text,/danger-guard\.mjs:present/);
+    assert.match(notified.text,/Settings registry: available/);
+    assert.match(notified.text,/Native tools: task:active, todo:active, ask:active/);
   } finally { rmSync(project,{recursive:true,force:true}); }
+});
+
+test('guard notices are independent from authorization decisions', () => {
+  assert.deepEqual(guardVerdict(null, '{"systemMessage":"Branch parked"}', true),
+    { decision: 'allow', message: 'Branch parked' });
+  for (const decision of ['allow', 'ask', 'deny']) {
+    const verdict = guardVerdict(null, JSON.stringify({
+      systemMessage: 'Recovery instructions',
+      hookSpecificOutput: { permissionDecision: decision, permissionDecisionReason: 'Expected reason' },
+    }), true);
+    assert.equal(verdict.decision, decision);
+    assert.equal(verdict.message, 'Recovery instructions');
+    if (decision !== 'allow') assert.equal(verdict.reason, 'Expected reason');
+  }
+  assert.equal(guardVerdict(null, '{"systemMessage":"Ignored","hookSpecificOutput":{}}', true).decision, 'deny');
+  assert.equal(guardVerdict(null, 'invalid', true).decision, 'deny');
+  assert.equal(guardVerdict(null, '', true), null);
 });

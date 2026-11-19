@@ -27,7 +27,7 @@ Ask me the onboarding questions, show me the exact plan, and wait for my accepta
 Or start from the terminal:
 
 ```bash
-npx @ericrisco/rsc@latest onboard
+node /path/to/fork/scripts/rsc.js onboard
 ```
 
 </div>
@@ -120,22 +120,33 @@ load progressively: only their description is paid for until a task needs them.
 **Using the OMP fork.** Run `node /path/to/fork/scripts/rsc.js` from the project, or install a tarball
 built with `npm pack` from the reviewed fork commit. The public npm package `@ericrisco/rsc` is the
 upstream distribution. For example, sync with `node /path/to/fork/scripts/rsc.js sync --target omp`.
-Projects declaring OMP keep their installed distribution by default, including projects that also
-declare another assistant. `RSC_OMP_ALLOW_UPSTREAM_AUTO_UPDATE=1` opts those projects into upstream
-updates.
+The fork records its distribution in `.rsc.json` and renders sync and recovery instructions using
+the verified local entry point. Run `node /path/to/fork/scripts/rsc.js provenance` to inspect the
+effective package, version, entry path and first persistent PATH candidate. `rsc doctor` also reports
+this information. Opaque shims are reported as unknown. Package metadata identifies a distribution
+for routing purposes. Obtain the checkout or tarball from a trusted source before executing it.
 
-Prefer a short `rsc` command? `npm install -g @ericrisco/rsc`.
-
-When an executable `rsc` is already on PATH, install and sync write operational skill and
-command instructions using that installed CLI. This also applies to unversioned commands
-suggested by hooks. Explicit versions such as `@4.1.1` and `@latest` keep their meaning.
-No execution permission is added for this choice. If the CLI is removed, run sync using the
-version declared in `.rsc.json` to restore the `npx` instructions.
+Upgrade by installing a reviewed fork checkout or tarball, then run its `sync`. This fork requires
+`upgrade --upstream` to intentionally select the npm package. Automatic upstream updates require
+`RSC_ALLOW_UPSTREAM_UPDATE=1` for projects marked as fork-installed. The older
+`RSC_OMP_ALLOW_UPSTREAM_AUTO_UPDATE=1` remains an opt-in for projects that declare OMP. A separately
+invoked, older public CLI does not implement these checks, so use the verified fork entry point.
 
 > **Run it inside the project you are equipping, not inside a clone of this repo.** The catalog's own
 > `package.json` is named `@ericrisco/rsc`, so `npx @ericrisco/rsc` from within a clone resolves to
 > the local bin and fails with `sh: rsc: command not found`. Working on the catalog itself? Use
 > `node scripts/rsc.js …` or `npm link`.
+
+On OMP 19, Plan permits the built-in write tool for session-local Markdown plan drafts and
+`xd://propose` for native review. Workspace writes, arbitrary shell or eval, extension tools, and
+MCP registry tools remain blocked in RSC Plan. OMP restricts native Plan workers. Execution paths
+that bypass extension interceptors are governed by the OMP host and OS, including permissions
+on local tools and daemon-managed processes.
+
+`/rsc-native-status` reports observed registry settings, tools, plugin switches, guard status,
+memory and distribution. Native task cards are shown by default. Set
+`RSC_OMP_COMPACT_TOOL_CARDS=1` to use the RSC compact view for completed task and todo cards.
+Prewalk, cross-instance task messaging, and MCP namespaces use the operator's native settings.
 
 ### For agents: "install this harness"
 

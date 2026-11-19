@@ -20,21 +20,27 @@ preparation hooks to finish before starting implementation; use Orca's
 
 ## Rebuild the declared harness during setup
 
-The non-interactive entry point is `sync` from the new checkout. Read `catalogVersion` from its
-committed `.rsc.json`, validate it as an exact version, and invoke that version. Do not substitute
-`@latest`. For a PowerShell setup hook:
+The non-interactive entry point is `sync` from the new checkout. For a project that declares
+`rscDistribution: github:JhonMA82/rsc-harness` or the `omp` target, configure the reviewed fork
+entry point in Orca. The public npm package refers to upstream even when pinned by version.
+In a PowerShell setup hook, point `RSC_FORK_CLI` at the reviewed checkout or installed fork tarball:
 
 ```powershell
-$manifest = Get-Content -LiteralPath .rsc.json -Raw -Encoding UTF8 | ConvertFrom-Json
-$rscVersion = $manifest.catalogVersion
-if ($rscVersion -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
-  throw 'Set an exact catalogVersion in .rsc.json before running setup.'
+$cli = $env:RSC_FORK_CLI
+if (-not [IO.Path]::IsPathRooted($cli) -or -not (Test-Path -LiteralPath $cli -PathType Leaf)) {
+  throw 'Set RSC_FORK_CLI to the absolute path of the reviewed fork scripts/rsc.js.'
 }
-npx -y "@ericrisco/rsc@$rscVersion" sync
-if ($LASTEXITCODE -ne 0) { throw 'Harness setup failed; do not start the agent yet.' }
+$origin = node $cli provenance | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0 -or -not $origin.compatible) {
+  throw 'The RSC entry does not match the fork distribution and catalogVersion declared in this checkout.'
+}
+node $cli sync
+if ($LASTEXITCODE -ne 0) { throw 'Harness setup failed. Inspect the error before starting the agent.' }
 ```
 
-Use the same exact version with a preinstalled `rsc` executable if the environment disallows npx.
+For an upstream project, pin its public package to the exact `catalogVersion` recorded in
+`.rsc.json`. Review the configured setup hook when changing the project's distribution.
+
 Keep credential copying and submodule setup in the project's existing Orca hooks; rsc does not
 need to read those credentials or replace those scripts.
 

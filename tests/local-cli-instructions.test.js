@@ -6,7 +6,7 @@ import { tmpdir } from './helpers/scratch.js';
 import { applyInstall } from '../scripts/install-apply.js';
 
 const text = (root, p) => readFileSync(join(root, p), 'utf8');
-test('installed CLI is preferred in operational instructions; version pins and user permissions survive', async (t) => {
+test('operational instructions use the verified fork entry despite a conflicting PATH', async (t) => {
   const root = mkdtempSync(join(tmpdir(), 'rsc-local-cli-'));
   const bin = join(root, 'bin'); mkdirSync(bin);
   const exe = join(bin, process.platform === 'win32' ? 'rsc.cmd' : 'rsc');
@@ -20,14 +20,14 @@ test('installed CLI is preferred in operational instructions; version pins and u
   writeFileSync(join(root, '.claude/settings.json'), JSON.stringify({ permissions }));
   const options = { cwd: root, target: 'claude', skillIds: ['suggest', 'implement'], policy: { baseAgents: false, memory: false, codeHooks: false } };
   await applyInstall(options);
-  assert.match(text(root, '.rsc/skills/implement/SKILL.md'), /`rsc risk/);
+  assert.match(text(root, '.rsc/skills/implement/SKILL.md'), /node .*scripts[/\\]rsc\.js.* risk/);
   assert.doesNotMatch(text(root, '.rsc/skills/implement/SKILL.md'), /npx @ericrisco\/rsc risk/);
-  assert.match(text(root, '.rsc/skills/suggest/SKILL.md'), /npx @ericrisco\/rsc@<catalogVersion/);
+  assert.match(text(root, '.rsc/skills/suggest/SKILL.md'), /RSC fork/);
   assert.deepEqual(JSON.parse(text(root, '.claude/settings.json')).permissions, permissions);
-  // Same-version sync notices the CLI disappeared and restores the runnable fallback.
+  // Sync keeps the fork entry when the conflicting command disappears.
   rmSync(exe);
   await applyInstall(options);
-  assert.match(text(root, '.rsc/skills/implement/SKILL.md'), /npx @ericrisco\/rsc risk/);
+  assert.match(text(root, '.rsc/skills/implement/SKILL.md'), /node .*scripts[/\\]rsc\.js.* risk/);
   assert.deepEqual(JSON.parse(text(root, '.claude/settings.json')).permissions, permissions);
 });
 
@@ -42,9 +42,9 @@ test('discovery ignores relative PATH entries and non-executable files; never ru
   assert.equal(installedCli({ env: { PATH: '.:relative' }, platform: 'linux' }), false);
   assert.equal(installedCli({ env: { PATH: root }, platform: 'linux' }), false);
   chmodSync(file, 0o755);
-  assert.equal(installedCli({ env: { PATH: root }, platform: 'linux' }), true);
+  assert.equal(installedCli({ env: { PATH: root }, platform: 'linux' }), false);
   writeFileSync(join(root, 'rsc.cmd'), 'not executed');
-  assert.equal(installedCli({ env: { PATH: root }, platform: 'win32' }), true);
+  assert.equal(installedCli({ env: { PATH: root }, platform: 'win32' }), false);
 });
 
 test('rewriting leaves version pins, other packages and fallback instructions exact', () => {
@@ -65,7 +65,7 @@ test('slash commands use the installed CLI and keep user command collisions', (t
   assert.ok(result.written.length);
   const bodies = result.written.map((p) => readFileSync(p, 'utf8')).join('\n');
   assert.doesNotMatch(bodies, /npx @ericrisco\/rsc memory/);
-  assert.match(bodies, /rsc memory/);
+  assert.match(bodies, /node .*scripts[/\\]rsc\.js.* memory/);
   const custom = result.written[0]; writeFileSync(custom, 'My command');
   reconcileCommands('claude', root, [], commands);
   assert.equal(readFileSync(custom, 'utf8'), 'My command');
@@ -79,4 +79,33 @@ test('npx and npm-injected package bins are not persistent PATH installations', 
     writeFileSync(join(bin, 'rsc'), 'not executed'); chmodSync(join(bin, 'rsc'), 0o755);
     assert.equal(installedCli({ env: { PATH: bin }, platform: 'linux' }), false);
   }
+});
+
+test('same-version public CLI on PATH is identified and fork upgrade needs an explicit choice', { skip: process.platform === 'win32' }, async t => {
+  const { spawnSync } = await import('node:child_process');
+  const { symlinkSync } = await import('node:fs');
+  const { activeCli, pathCli } = await import('../scripts/lib/cli-invocation.js');
+  const cwd = mkdtempSync(join(tmpdir(), 'rsc-cli-origin-'));
+  t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  const bin = join(cwd, 'bin');
+  const upstream = join(cwd, 'upstream');
+  mkdirSync(bin);
+  mkdirSync(join(upstream, 'scripts'), { recursive: true });
+  const { entry, version } = activeCli();
+  writeFileSync(join(upstream, 'package.json'), JSON.stringify({
+    name: '@ericrisco/rsc', version, bin: { rsc: 'scripts/rsc.js' },
+    repository: { url: 'git+https://github.com/ericrisco/rsc-harness.git' },
+  }));
+  const upstreamEntry = join(upstream, 'scripts', 'rsc.js');
+  writeFileSync(upstreamEntry, 'throw new Error("must not execute")', { mode: 0o755 });
+  symlinkSync(upstreamEntry, join(bin, 'rsc'));
+  const env = { ...process.env, PATH: bin };
+  assert.equal(pathCli({ env }).distribution, 'npm:@ericrisco/rsc');
+  assert.equal(installedCli({ env }), false);
+  const origin = spawnSync(process.execPath, [entry, 'provenance'], { cwd, env, encoding: 'utf8' });
+  assert.equal(origin.status, 0, origin.stderr);
+  assert.equal(JSON.parse(origin.stdout).active.distribution, 'github:JhonMA82/rsc-harness');
+  const upgrade = spawnSync(process.execPath, [entry, 'upgrade', '--global'], { cwd, env, encoding: 'utf8' });
+  assert.notEqual(upgrade.status, 0);
+  assert.match(upgrade.stderr, /reviewed fork checkout or tarball/);
 });

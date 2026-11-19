@@ -202,7 +202,7 @@ test('rsc add suggests close agent ids instead of exposing a raw skill error', (
 
 test('rsc upgrade --dry-run prints npm upgrade command', () => {
   const cwd = mkdtempSync(join(tmpdir(), 'rsc-cli-upgrade-'));
-  const result = spawnSync(process.execPath, [join(ROOT, 'scripts/rsc.js'), 'upgrade', '--target', 'claude', '--dry-run'], {
+  const result = spawnSync(process.execPath, [join(ROOT, 'scripts/rsc.js'), 'upgrade', '--upstream', '--target', 'claude', '--dry-run'], {
     cwd,
     encoding: 'utf8',
   });

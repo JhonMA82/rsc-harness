@@ -10,6 +10,11 @@ node_modules/
 # repo as having an abandoned diff, which blocks switching branches.
 .claude/
 
+# The root CLAUDE.md is the same kind of local wiring as .rsc/ and .claude/: init's
+# knowledge map points at 02-DOCS/wiki/harness/, which this repo ignores. Committed, it
+# would ship a map whose links dangle in every clone.
+/CLAUDE.md
+
 # Per-tool ignores already exist inside each skill's _TEMPLATE/.gitignore.
 
 # build artifacts

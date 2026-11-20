@@ -5,7 +5,9 @@
 export default async function rscOmp(pi) {
   try {
     const bridge = await import('../../../.rsc/omp-bridge.mjs');
-    return await bridge.default(pi);
+    // Resolve OMP's package from its discovered extension entry, not from a detached .rsc import.
+    const registry = await import('@oh-my-pi/pi-coding-agent/config/registry').catch(() => null);
+    return await bridge.default(pi, registry);
   } catch {
     // No harness here, or it was purged: nothing to enforce and nothing to say.
   }

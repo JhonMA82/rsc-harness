@@ -47,25 +47,25 @@ When the task needs a capability the user has **not installed** — building, cr
 analyzing, connecting, shipping, securing, selling, teaching, governing or documenting something —
 name it and offer it. This runs mid-conversation, not only at project start.
 
-1. `npx @ericrisco/rsc catalog --available` lists every not-installed skill as
+1. `node '/home/you/dev/rsc-harness/scripts/rsc.js' catalog --available` lists every not-installed skill as
    `id  available  short description`.
 2. Pick the single best fit **by meaning**, the way you would match a request to a teammate's
    expertise, even when no keyword overlaps. If nothing genuinely fits, say so and move on: a
    tangential suggestion is worse than none.
 3. Ask once, plainly: "Para esto instalaría `<id>`, que aún no tienes. ¿La instalo? (sí/no)".
-4. On yes, run `npx @ericrisco/rsc add <id>`, then continue the original task.
+4. On yes, run `node '/home/you/dev/rsc-harness/scripts/rsc.js' add <id>`, then continue the original task.
 
 One suggestion at a time,
 and never to interrupt a flow with a nice-to-have. Never recommend something already installed
-(`npx @ericrisco/rsc list`).
+(`node '/home/you/dev/rsc-harness/scripts/rsc.js' list`).
 
-`npx @ericrisco/rsc consult "<task>"` is a **lexical** hint only: it misses natural-language and
+`node '/home/you/dev/rsc-harness/scripts/rsc.js' consult "<task>"` is a **lexical** hint only: it misses natural-language and
 non-English intent. Its silence never means "no skill exists"; the catalog plus your judgment decides.
 
 ### Automation gap — after the work
 
 Delivered work a repeatable **procedure**? Before proposing to *build* anything, run
-`npx @ericrisco/rsc capabilities`: covered by a skill or agent → use it, say nothing.
+`node '/home/you/dev/rsc-harness/scripts/rsc.js' capabilities`: covered by a skill or agent → use it, say nothing.
 Not covered → one line, skill or agent. Rules: `skill-scout`.
 
 ---
@@ -79,7 +79,7 @@ is true, act on it **once** in the session:
 - the same hook seems to run several times;
 - the harness is wired for an assistant that is not the one running.
 
-Run `npx @ericrisco/rsc doctor`, and say in one line what is wrong **as a symptom**, not as
+Run `node '/home/you/dev/rsc-harness/scripts/rsc.js' doctor`, and say in one line what is wrong **as a symptom**, not as
 a cause. Then:
 
 - **Nothing built** — `.rsc.json` without `.rsc/`: a clone. Name
@@ -88,7 +88,7 @@ a cause. Then:
   is not a no, `.rsc/.no-harness` is.
 - Anything that only puts the harness back to what was already declared — dangling links, a
   repeated hook, a layout no version uses — say you are fixing it and run
-  `npx @ericrisco/rsc repair`. Restoring is not deciding, and a recoverable copy is kept.
+  `node '/home/you/dev/rsc-harness/scripts/rsc.js' repair`. Restoring is not deciding, and a recoverable copy is kept.
 - Anything that would change a decision — moving to another assistant, adopting a skill a
   teammate added, disarming a gate — **ask first**. A `git pull` never rewrites someone's
   machine.
@@ -120,6 +120,8 @@ Define a term at first use; never give a command, flag or path without saying wh
 ## Orientación (siempre)
 
 Habla con la voz de `orient`: frases cortas, una idea por frase, al grano, y cada respuesta se entiende sola. Registro técnico o con analogías según `technical_level` en `02-DOCS/wiki/harness/user-profile.md`. Cierra cada turno con el **bloque-brújula** (📍 dónde estás · ➡️ siguiente, terminando en pregunta; ✅ y 🧭 cuando hay algo hecho o decidido). **Nunca termines en seco.** Protocolo completo: skill `orient` → `skills/orient/references/orientation-contract.md`. (Defiere a §2 el "¿instalo la skill que falta?".)
+
+**RSC fork.** Use the installed fork entry shown in these instructions for sync, doctor and recovery. A version on the public npm package does not identify the fork. See the fork README for worktree setup.
 
 ## Native todo panel (Oh My Pi)
 

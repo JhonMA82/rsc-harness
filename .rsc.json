@@ -47,6 +47,7 @@
   ],
   "ownSkills": [],
   "catalogVersion": "4.2.0",
+  "rscDistribution": "github:JhonMA82/rsc-harness",
   "tier": null,
   "optOuts": [
     "trunk-guard"

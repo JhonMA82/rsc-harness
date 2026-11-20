@@ -292,3 +292,13 @@ test('guard notices are independent from authorization decisions', () => {
   assert.equal(guardVerdict(null, 'invalid', true).decision, 'deny');
   assert.equal(guardVerdict(null, '', true), null);
 });
+
+test('Native guidance preserves Autopilot, the decision queue and Ship approvals', () => {
+  const guidance = nativeGuidance({}, { getActiveTools: () => ['ask', 'task', 'todo'] });
+  assert.match(guidance, /up-front authorization/);
+  assert.match(guidance, /ASDD decision queue and continues independent work/);
+  assert.match(guidance, /risk 0–1, green CI and no open blocking entries/);
+  assert.match(guidance, /Risk 2 requires an approving human PR review or an explicit human yes/);
+  assert.match(guidance, /grants, including yolo, carry no RSC authorization/);
+  assert.doesNotMatch(guidance, /confirmation at the point of action/);
+});

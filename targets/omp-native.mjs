@@ -142,16 +142,17 @@ export function nativeGuidance(ctx, pi, fallbackModes = null, native = null, { w
       lines.push('rsc/OMP task: task.steps is off in this runtime. Run one prompt per approved checklist item; do not ask for stepped workers.');
     const auto = effective['task.autoParallel'];
     if (auto === 'on')
-      lines.push('rsc/OMP parallel: task.autoParallel=on lets OMP create workers when independent work appears. rsc still owns the accepted plan and task contracts; obtain approval and never split coupled files across agents.');
+      lines.push('rsc/OMP parallel: task.autoParallel=on lets OMP create workers when independent work appears. use the accepted RSC plan and task contracts; never split coupled files across agents.');
     else if (auto === 'off')
       lines.push('rsc/OMP parallel: task.autoParallel=off in this runtime. Do not split work across agents; run the slices sequentially with the native task tool.');
     else
-      lines.push('rsc/OMP parallel: task.autoParallel=suggest reports candidate independent work only. rsc makes the decision; obtain the accepted plan and use explicit task batch/parallel only where its contracts allow.');
+      lines.push('rsc/OMP parallel: task.autoParallel=suggest reports candidate independent work only. use the accepted RSC plan and explicit task batch/parallel only where its contracts allow.');
   }
   if (Array.isArray(tools) && tools.includes('todo'))
     lines.push('rsc/OMP todo: use native panel on FTD/ASDD only, not Answer. Blockers stay in the durable rsc decision queue and show as pending (OMP removed todo blocked status). For multiple completed items use native multi-done.');
   if (Array.isArray(tools) && tools.includes('ask'))
-    lines.push('rsc/OMP ask: structured decisions in clarify/specify/orient use native ask({html}) only with interactive UI; timeouts, preselected choices or a form answer are NOT formal consent to approve a spec, branch, merge, publish or destructive change. Get explicit operator confirmation at the point of action.');
+    lines.push('rsc/OMP ask: structured decisions in clarify/specify/orient use native ask({html}) only with interactive UI; timeouts, preselected choices or a form answer are NOT formal consent to approve a spec, branch, merge, publish or destructive change. Use the approval required by the active RSC workflow.');
+  lines.push('rsc/OMP approvals: follow the active RSC lane and Ship. Autopilot uses its up-front authorization, records pending decisions in the ASDD decision queue and continues independent work. Before self-merging, verify risk 0–1, green CI and no open blocking entries. Risk 2 requires an approving human PR review or an explicit human yes to that merge. OMP tool grants, including yolo, carry no RSC authorization. Do not use another tool to sidestep a RSC denial.');
   if (effective['commit.enabled'] === true)
     lines.push('rsc/OMP commit: native /commit and eval commit are ENABLED in this runtime and are not intercepted by rsc bash ship/branch/gitmoji guards. Use them only under the accepted ship policy; never no_verify to bypass checks.');
   else

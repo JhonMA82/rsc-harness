@@ -19,10 +19,10 @@ function fixture(t, policy = {}) {
   return { root, git, subdir };
 }
 
-async function load(root, api = {}) {
+async function load(root, api = {}, registry) {
   const handlers = new Map();
   const { default: factory } = await import(pathToFileURL(join(root, '.rsc', 'omp-bridge.mjs')).href);
-  await factory({ ...api, on: (event, handler) => handlers.set(event, handler) });
+  await factory({ ...api, on: (event, handler) => handlers.set(event, handler) }, registry);
   return handlers;
 }
 
@@ -91,18 +91,65 @@ test('Plan checks tool provenance and rejects custom and MCP mutations', async t
   }
 });
 
-test('Delivery cannot inherit authorization from a headless host or an ask timeout', async t => {
-  const { root } = fixture(t);
-  const handlers = await load(root);
-  const ctx = {
-    cwd: root, agent: { kind: 'main' }, hasUI: false,
-    ui: { approve: () => assert.fail('headless approval') },
-  };
+function deliveryFixture(t) {
+  const project = fixture(t);
+  const { root, git } = project;
+  git('config', 'user.name', 'RSC fixture');
+  git('config', 'user.email', 'rsc@example.invalid');
+  writeFileSync(join(root, '.git', 'info', 'exclude'), '/.rsc/\n/.omp/\n');
+  git('add', '.rsc.json');
+  git('commit', '-qm', 'Base');
+  git('switch', '-qc', 'feature');
+  return project;
+}
+
+const yoloRegistry = {
+  lookup: key => key === 'tools.approvalMode' ? { get: () => 'yolo' } : undefined,
+};
+
+test('Shared guards permit low-risk delivery without an extra OMP approval', async t => {
+  const { root, git, subdir } = deliveryFixture(t);
+  const remote = join(root, '.rsc', 'fixture-remote.git');
+  git('init', '-q', '--bare', remote);
+  git('remote', 'add', 'origin', remote);
+  writeFileSync(join(root, 'README.md'), '# Tier zero fixture\n');
+  git('add', 'README.md');
+  git('commit', '-qm', 'Document fixture');
+
+  const handlers = await load(root, { pi: { settings: {} } }, yoloRegistry);
   const call = handlers.get('tool_call');
-  for (const command of ['git push', 'gh pr create', 'git merge feature']) {
-    assert.match((await call(bash(command), ctx))?.reason ?? '', /confirm publishing or merging/);
+  const ctx = { cwd: subdir, agent: { kind: 'main' }, hasUI: true,
+    ui: { approve: () => assert.fail('no approval was requested by a shared guard') } };
+  const publication = await call(bash('git push -u origin feature'), ctx);
+  assert.equal(publication, undefined);
+  // Execute only against the temporary local bare repository.
+  git('push', '-qu', 'origin', 'feature');
+  assert.equal(git('--git-dir', remote, 'rev-parse', 'refs/heads/feature').toString(), git('rev-parse', 'HEAD').toString());
+
+  for (const command of ['git -C .. push', 'gh pr create --head feature', 'gh pr merge 12 --squash',
+    'git merge main', 'echo "git push"']) {
+    assert.equal(await call(bash(command), { ...ctx, hasUI: false }), undefined, command);
   }
-  assert.equal(await call(bash('echo "git push"'), ctx), undefined);
+});
+
+test('Tier-two evidence, unsafe operations and guard failures still block delivery', async t => {
+  const { root, git, subdir } = deliveryFixture(t);
+  mkdirSync(join(root, 'auth'));
+  writeFileSync(join(root, 'auth', 'session.js'), 'export const login = true;\n');
+  git('add', 'auth/session.js');
+  git('commit', '-qm', 'Tier two fixture');
+  const handlers = await load(root, { pi: { settings: {} } }, yoloRegistry);
+  const call = handlers.get('tool_call');
+  const ctx = { cwd: subdir, agent: { kind: 'main' }, hasUI: true,
+    ui: { approve: () => assert.fail('denials must never request approval') } };
+  for (const command of ['git push', 'git -C .. push', 'bash -c "git push"', 'gh pr create', 'gh pr merge 12']) {
+    const verdict = await call(bash(command), ctx);
+    assert.equal(verdict?.block, true, command);
+    assert.match(verdict.reason, /risk tier 2/i, command);
+  }
+  assert.match((await call(bash('git push --force'), ctx)).reason, /force-push/);
+  rmSync(join(root, '.rsc', 'ship-guard.mjs'));
+  assert.match((await call(bash('git push'), ctx)).reason, /ship-guard\.mjs.*Required guard is missing/);
   assert.match((await handlers.get('tool_result')({ toolName: 'ask', details: { timedOut: true } }, ctx))
     ?.additionalContext ?? '', /NOT explicit approval/);
 });

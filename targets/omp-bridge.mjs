@@ -12,7 +12,7 @@ import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 // The native layer is optional like every sibling above: a `.rsc/` from before this module, or an
 // interrupted copy, must cost the native settings, never the guards, memory or lane gate.
 const native = await import('./omp-native.mjs').catch(() => null);
@@ -262,16 +262,6 @@ function guardPolicies(policyRoot, gitRoot) {
     const path = join(policyRoot, '.rsc', guard.name);
     return { ...guard, path, present: existsSync(path) };
   });
-}
-
-async function needsDeliveryApproval(policyRoot, command) {
-  const asdd = await optional(pathToFileURL(join(policyRoot, '.rsc', 'asdd-gate.mjs')));
-  if (asdd?.isPushOrPr(command)) return true;
-  const shell = await optional(pathToFileURL(join(policyRoot, '.rsc', 'shell-unwrap.mjs')));
-  const gitMerge = /(?:^|\s)(?:[^\s]+\/)?git\s+(?:(?:-[Cc]\s+(?:"[^"]*"|'[^']*'|\S+)|--[^\s]+)\s+)*merge(?=\s|$)/u;
-  return (shell?.expand(command) ?? [command]).some(segment => gitMerge.test(segment.replace(
-    /"([^"\\]|\\.)*"|'[^']*'/gu, '""',
-  )));
 }
 
 function runGuard(guard, payload, executionCwd) {
@@ -691,10 +681,8 @@ export default async function rscOmp(pi, hostRegistry) {
       });
       const guards = guardPolicies(policyRoot, gitRoot);
       const verdicts = await Promise.all(guards.map(guard => runGuard(guard, payload, executionCwd)));
-      const ship = guards.find(guard => guard.name === 'ship-guard.mjs');
-      if (ship.enabled && ship.present && await needsDeliveryApproval(policyRoot, command)) {
-        verdicts.push({ decision: 'ask', reason: 'rsc: confirm publishing or merging this change.' });
-      }
+      // Translate the shared guard verdicts. Ship owns landing authorization, including
+      // the up-front Autopilot decision. A command name is not an RSC verdict.
       const notices = [...new Set(verdicts.flatMap(verdict => verdict?.message ? [verdict.message] : []))];
       for (const notice of notices) {
         try { ctx?.ui?.notify?.(notice, 'info'); } catch { /* delivery has no bearing on authorization */ }
